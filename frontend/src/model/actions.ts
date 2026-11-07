@@ -1,7 +1,7 @@
 import { startTransition, useEffect } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import { cancelRun, getRun, send, startRun, subscribeToRun } from "../api/client";
-import type { Lane, Run, RunEvent, ScaffoldResponse, Workspace } from "../api/types";
+import { cancelRun, generateScaffold, getRun, send, startRun, subscribeToRun } from "../api/client";
+import type { Lane, Run, RunEvent, Workspace } from "../api/types";
 import { usePreferences } from "../shell/preferences";
 import { diagnostics } from "./dsl";
 import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "./scaffoldLimits";
@@ -27,7 +27,7 @@ async function generate(lane: Lane, reportFailure: boolean): Promise<Lane> {
   if (state().generating.includes(lane.id)) throw new Error(`Lane ${lane.label} is already generating code.`);
   useBench.setState((previous) => ({ generating: [...previous.generating, lane.id] }));
   try {
-    const result = await send<ScaffoldResponse>("/scaffold", { dsl: sourceOf(lane), language: lane.language, arch: lane.arch });
+    const result = await generateScaffold({ dsl: sourceOf(lane), language: lane.language, arch: lane.arch });
     const file = harness(lane.language);
     const next = { ...lane, files: { ...lane.files, [file]: result.code }, scaffold: {
       dslHash: scaffoldKey(lane), model: result.model, cached: result.cached, warnings: result.warnings,

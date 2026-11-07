@@ -5,7 +5,7 @@ import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { USE_MOCK_API } from "../api/config";
 import { sampleRun } from "../model/examples";
 import type { Lane, Machine, RunEvent, Workspace } from "../api/types";
-import { LaneBadge, defaultChart, laneRatio } from "../chart/config";
+import { LaneBadge, defaultChart, laneRatio, type ChartSettings } from "../chart/config";
 import { formatRatio, laneVar, num, param, params } from "../model/format";
 import { useBench, type Panel } from "../model/state";
 import { parseSweep } from "../model/sweep";
@@ -42,9 +42,10 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
   const laneSweeps = useMemo(() => workspace.lanes.map((lane) => ({ lane, ...parseSweep(lane.files["benchmark.perf"] ?? "") })), [workspace.lanes]);
   const sweep = lastRun?.id === active?.id && lastRun ? lastRun.sweep : active && USE_MOCK_API ? sampleRun.sweep : undefined;
   const activeSweep = useMemo(() => sweep ?? parseSweep((active?.snapshot.lanes[0] ?? workspace.lanes[0])?.files["benchmark.perf"] ?? "").sweep, [sweep, active?.snapshot.lanes, workspace.lanes]);
-  const ratios = laneRatio(rows, activeLanes, "cycles", "min");
+  const metric = USE_MOCK_API || rows.some((row) => row.metrics.cycles) ? "cycles" : "timeNs";
+  const ratios = laneRatio(rows, activeLanes, metric, "min");
   const sizeName = activeSweep.find((entry) => entry.name === "N")?.name ?? activeSweep[0]?.name ?? "";
-  const settings = useMemo(() => ({ ...defaultChart, x: sizeName, size: sizeName, normalize: sizeName ? "element" as const : "raw" as const }), [sizeName]);
+  const settings = useMemo<ChartSettings>(() => ({ ...defaultChart, metric, x: sizeName, size: sizeName, normalize: sizeName ? "element" as const : "raw" as const }), [metric, sizeName]);
   const running = pending || Boolean(active && ["queued", "building", "running"].includes(active.status));
   const logs = active?.events ?? [];
   const onSweepEdit = (lane: Lane, sweepText: string) => {

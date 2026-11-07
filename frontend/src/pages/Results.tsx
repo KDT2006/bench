@@ -26,7 +26,8 @@ function show(value: number | undefined, suffix = "") { return value === undefin
 function finding(run: Run) {
   const [a, b] = run.workspaceSnapshot.lanes;
   if (!a || !b) return { text: "Use the sweep to see how the cost of this benchmark changes with input size." };
-  const ratios = laneRatio(run.rows, [a, b], "cycles", "min");
+  const metric = run.rows.some((row) => row.metrics.cycles) ? "cycles" : "timeNs";
+  const ratios = laneRatio(run.rows, [a, b], metric, "min");
   const pairs = run.rows.filter((row) => row.laneId === b.id).flatMap((row) => {
     const ratio = ratios(row);
     return ratio && Number.isFinite(ratio) ? [{ ratio, n: row.params.N }] : [];
@@ -44,7 +45,9 @@ function finding(run: Run) {
   const range = beyond.length && l2 ? `past L2 (${bytes(l2)})` : "across matched parameters";
   return {
     value: formatRatio(Math.max(mid, 1 / mid)),
-    text: `${label(faster)} used fewer cycles than ${label(slower)} ${range}. Median ratio of minimum cycles.`,
+    text: metric === "cycles"
+      ? `${label(faster)} used fewer cycles than ${label(slower)} ${range}. Median ratio of minimum cycles.`
+      : `${label(faster)} ran faster than ${label(slower)} ${range}. Median ratio of minimum times.`,
   };
 }
 
@@ -149,7 +152,7 @@ function RunView({ run }: { run: Run }) {
   const [controlsInitiallyOpen] = useState(() => !matchMedia("(width < 768px)").matches);
   const exportRef = useRef<(() => string) | null>(null);
   const chartType = chartTypes.find((entry) => entry === url.get("chart")) ?? "line";
-  const metric = metrics.find((entry) => entry === url.get("metric")) ?? "cycles";
+  const metric = metrics.find((entry) => entry === url.get("metric")) ?? (run.rows.some((row) => row.metrics.cycles) ? "cycles" : "timeNs");
   const stat = stats.find(([value]) => value === url.get("stat"))?.[0] ?? "min";
   const x = run.sweep.find((entry) => entry.name === url.get("x")) ?? run.sweep[0];
   const sizes = run.sweep.filter((entry) => entry.values.every((value) => typeof value === "number"));

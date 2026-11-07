@@ -39,12 +39,13 @@ function localStorage(directory?: string): MockStorage {
   };
 }
 
-export function mockApi(directory?: string, generateScaffold?: ScaffoldGenerator): Plugin {
+export function mockApi(directory?: string, generateScaffold?: ScaffoldGenerator, scaffoldOnly = false): Plugin {
   const route = makeMockApi(localStorage(directory), undefined, generateScaffold);
   const install = (server: Pick<ViteDevServer, "middlewares">) => {
     server.middlewares.use((req, res, next) => {
       const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
       if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) return next();
+      if (scaffoldOnly && url.pathname !== "/api/scaffold") return next();
       const headers = new Headers();
       for (const [name, value] of Object.entries(req.headers)) {
         if (value) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
