@@ -53,3 +53,19 @@ ReadCPUTimer: _Timer
 ReadCPUTimerStartFenced: _Timer
 ReadCPUTimerEndFenced: _Timer
 TIMER_BACKEND, ReadCPUTimer, ReadCPUTimerStartFenced, ReadCPUTimerEndFenced = _select_backend()
+
+
+def _select_frequency_reader() -> _Timer:
+    if TIMER_BACKEND == "perf_counter_ns":
+        return lambda: 1_000_000_000
+    if TIMER_BACKEND == "native-arm64":
+        try:
+            return _native.load_stub(_native.ARM64_STUBS["ReadCPUTimerFrequency"])
+        except Exception:
+            pass
+    # RDTSC and the macOS fallback are calibrated against the OS timer.
+    return lambda: 0
+
+
+# Zero means the backend needs calibration.
+ReadCPUTimerFrequency: _Timer = _select_frequency_reader()

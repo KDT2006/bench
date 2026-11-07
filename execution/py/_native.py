@@ -34,6 +34,7 @@ _A64_MRS_X0_CNTVCT = bytes.fromhex("40E03BD5")  # mrs x0, cntvct_el0
 _A64_RET = bytes.fromhex("C0035FD6")
 
 ARM64_STUBS = {
+    "ReadCPUTimerFrequency": bytes.fromhex("00E03BD5") + _A64_RET,  # mrs x0, cntfrq_el0
     "ReadCPUTimer": _A64_MRS_X0_CNTVCT + _A64_RET,
     "ReadCPUTimerStartFenced": _A64_ISB + _A64_MRS_X0_CNTVCT + _A64_ISB + _A64_RET,
     "ReadCPUTimerEndFenced": _A64_ISB + _A64_MRS_X0_CNTVCT + _A64_RET,
