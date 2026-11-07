@@ -1,8 +1,8 @@
 import { API_BASE_URL } from "./config";
-import type { Machine, Run, RunEvent, Workspace } from "./types";
+import type { Lane, Machine, Run, RunEvent, ScaffoldResponse, Workspace } from "./types";
 
-export async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, options);
+async function requestUrl<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, options);
   if (!response.ok) {
     const detail = await response.json().catch(() => null) as { message?: string } | null;
     throw new Error(detail?.message || `Request failed (${response.status}). Try again.`);
@@ -10,6 +10,17 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
+
+export function request<T>(path: string, options?: RequestInit) {
+  return requestUrl<T>(`${API_BASE_URL}${path}`, options);
+}
+
+export const generateScaffold = (body: { dsl: string; language: Lane["language"]; arch: Lane["arch"] }) =>
+  requestUrl<ScaffoldResponse>("/api/scaffold", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 
 export const getMachines = (signal?: AbortSignal) => request<Machine[]>("/machines", { signal });
 export const getRun = (id: string, signal?: AbortSignal) => request<Run>(`/runs/${encodeURIComponent(id)}`, { signal });

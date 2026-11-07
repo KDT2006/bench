@@ -14,7 +14,7 @@ import (
 // permutations. The website validates the DSL as the user types (frontend/src/model/sweep.ts);
 // this is a straightforward version of the same rules.
 
-const maxPermutations = 200
+const maxPermutations = 256
 
 // SweepParam values are float64 or string.
 type SweepParam struct {
@@ -66,7 +66,7 @@ func parseSweepAll(dsl string) ([]SweepParam, []string) {
 		count = min(count*len(p.Values), maxPermutations+1)
 	}
 	if count > maxPermutations {
-		errs = append(errs, fmt.Sprintf("Reduce the sweep to %d permutations or fewer.", maxPermutations))
+		errs = append(errs, fmt.Sprintf("The sweep exceeds the limit of %d combinations.", maxPermutations))
 	}
 	return sweep, errs
 }

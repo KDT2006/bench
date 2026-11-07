@@ -257,7 +257,7 @@ func TestStartRunErrors(t *testing.T) {
 	c.do("POST", "/runs", map[string]any{"workspace": workspace("")}, 503, nil)
 	c.register("m1")
 	c.do("POST", "/runs", map[string]any{"workspace": workspace("#sweep\nN = [1, x]\n")}, 422, nil)
-	c.do("POST", "/runs", map[string]any{"workspace": workspace("#sweep\nA = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]\nB = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]\n")}, 422, nil)
+	c.do("POST", "/runs", map[string]any{"workspace": workspace("#sweep\nA = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]\nB = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]\n")}, 422, nil)
 	noHarness := workspace("")
 	delete(noHarness["lanes"].([]any)[0].(map[string]any)["files"].(map[string]any), "harness.go")
 	c.do("POST", "/runs", map[string]any{"workspace": noHarness}, 400, nil)
@@ -334,5 +334,17 @@ func TestParseSweep(t *testing.T) {
 	}
 	if got := len(permutations(nil)); got != 1 {
 		t.Fatalf("empty sweep permutations = %d", got)
+	}
+}
+
+func TestSweepCombinationLimit(t *testing.T) {
+	values := strings.Repeat("1,", 15) + "1"
+	sweep := "#sweep\nN = [" + values + "]\nstride = [" + values
+	parsed, err := parseSweep(sweep + "]\n#bench\n")
+	if err != nil || len(permutations(parsed)) != 256 {
+		t.Fatalf("expected 256 combinations, got %v (%v)", parsed, err)
+	}
+	if _, err := parseSweep(sweep + ",2]\n#bench\n"); err == nil {
+		t.Fatal("expected an error for a sweep larger than 256 combinations")
 	}
 }

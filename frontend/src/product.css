@@ -150,7 +150,18 @@
   .finding strong { font: 500 var(--size-readout)/1 var(--font-code); font-variant-numeric: tabular-nums; letter-spacing: -.065em; }
   .finding p { max-width: 50ch; color: var(--text-2); font-size: 1.06rem; }
   .result-chart-grid { display: grid; grid-template-columns: minmax(0, 1fr) 244px; gap: 16px; align-items: start; }
-  .chart-tabs { margin-top: 10px; }
+  .chart-tabs { margin-bottom: 10px; }
+  .chart-tabs [aria-pressed="true"] { border-color: var(--text-2); background: var(--raised); color: var(--text-1); }
+  .input-comparison { display: grid; gap: 14px; margin-bottom: 18px; padding: 16px; border: 1px solid var(--hairline); border-radius: var(--radius-panel); background: var(--panel); }
+  .input-comparison .section-line { flex-wrap: wrap; }
+  .input-comparison h2 { font-size: var(--size-h3); }
+  .input-comparison p, .input-comparison label { color: var(--text-2); font-size: var(--size-small); }
+  .input-comparison ul { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(30px, 3fr) minmax(0, max-content); gap: 8px 12px; }
+  .input-comparison li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+  .input-comparison li > span:first-child { display: flex; gap: 6px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+  .input-comparison li > span:last-child { font-size: var(--size-code); text-align: right; }
+  .comparison-track { height: 8px; border-radius: 99px; background: var(--raised); }
+  .comparison-track > div { height: 100%; border-radius: inherit; background: var(--channel); }
   .result-rail { padding: 12px; background: var(--panel); border: 1px solid var(--hairline); border-radius: var(--radius-panel); min-width: 0; }
   .result-rail > summary { font-size: var(--size-ui); font-weight: 600; cursor: pointer; border-radius: var(--radius-control); }
   .chart-fields { display: grid; gap: 8px; margin-top: 10px; }
@@ -317,7 +328,6 @@
   }
   @media (width < 1280px) {
     .result-chart-grid { grid-template-columns: minmax(0, 1fr); }
-    .result-rail { grid-row: 1; }
     .chart-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .guide-layout { grid-template-columns: 155px minmax(0, 1fr) 134px; }
   }

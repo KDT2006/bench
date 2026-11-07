@@ -13,10 +13,10 @@ import { request } from "../api/client";
 import { download } from "../model/download";
 import { USE_MOCK_API } from "../api/config";
 import { LaneBadge } from "../chart/config";
-import { generateLane, isStale, runBench } from "../model/actions";
+import { generateLane, isStale, runBench, scaffoldKey } from "../model/actions";
 import { freshWorkspace, replaceWorkspace, useBench, validWorkspace } from "../model/state";
 import { harness, laneColors, laneVar, languages } from "../model/format";
-import { starterWorkspace } from "../model/examples";
+import { sampleRun, starterWorkspace } from "../model/examples";
 import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "../model/scaffoldLimits";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
@@ -217,6 +217,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
   const [params, setParams] = useSearchParams();
   const selectedLane = workspace.lanes.find((lane) => lane.label === params.get("lane")) ?? workspace.lanes[0];
   const editable = !shared && !mobile;
+  const onlineMachine = machines?.find((item) => item.status !== "offline" && item.toolchains.go && item.toolchains.python);
   const machine = machines?.find((item) => item.arch === selectedLane.arch) ?? machines?.[0];
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -282,6 +283,22 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
       download(`${basename}.zip`, new Blob([new Uint8Array(archive)], { type: "application/zip" }));
     } catch { useBench.getState().notify({ text: "Couldn’t export the files. Try again.", error: true }); }
   }
+  function loadLiveExample() {
+    if (!onlineMachine) return;
+    const { arch } = onlineMachine;
+    flushEditors();
+    const next = freshWorkspace(sampleRun.workspaceSnapshot);
+    next.lanes = next.lanes.map((lane) => {
+      const configured: Lane = {
+        ...lane,
+        arch,
+        build: { ...lane.build, toolchainVersion: onlineMachine.toolchains[lane.language] },
+        runner: { maxReps: 120, warmup: 1, minTimeMs: 50, counters: ["time", "throughput"] },
+      };
+      return { ...configured, scaffold: { dslHash: scaffoldKey(configured), model: "Built-in Array sum", warnings: [], cached: false } };
+    });
+    replaceWorkspace(next);
+  }
   function jumpTo(lane: Lane, line: number) {
     if (!workspace.lanes.some((entry) => entry.id === lane.id)) return;
     select(lane, harness(lane.language));
@@ -339,7 +356,14 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     </div>
     {shared && <div className="bench-banner"><span>You’re viewing a shared bench. Fork it to edit and run.</span><button className="control primary" type="button" onClick={onFork}>Fork</button></div>}
     {!shared && mobile && <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div>}
-    {!shared && editable && help && <div className="bench-banner">
+    {!shared && editable && !USE_MOCK_API && <div className="bench-banner">
+      <span>{onlineMachine ? "Live demo · Go and Python Array sum on a connected machine" : "Waiting for a machine with Go and Python."}</span>
+      <div className="inline-controls">
+        <button className="control" type="button" onClick={loadLiveExample} disabled={!onlineMachine}>Load live Array sum</button>
+        {runControl}
+      </div>
+    </div>}
+    {!shared && editable && USE_MOCK_API && help && <div className="bench-banner">
       <span>New here? Start from an <Link to="/examples">example</Link>.</span>
       <div className="inline-controls">
         {runControl}

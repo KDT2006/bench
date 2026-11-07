@@ -5,10 +5,10 @@ import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { USE_MOCK_API } from "../api/config";
 import { sampleRun } from "../model/examples";
 import type { Lane, Machine, RunEvent, Workspace } from "../api/types";
-import { LaneBadge, defaultChart, laneRatio } from "../chart/config";
+import { LaneBadge, defaultChart, laneRatio, type ChartSettings } from "../chart/config";
 import { formatRatio, laneVar, num, param, params } from "../model/format";
 import { useBench, type Panel } from "../model/state";
-import { parseSweep } from "../model/sweep";
+import { MAX_PERMUTATIONS, parseSweep, sweepCombinations } from "../model/sweep";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const tabs: [Panel, string][] = [["live", "Live"], ["sweep", "Sweep"], ["build", "Build output"], ["log", "Run log"]];
@@ -42,9 +42,10 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
   const laneSweeps = useMemo(() => workspace.lanes.map((lane) => ({ lane, ...parseSweep(lane.files["benchmark.perf"] ?? "") })), [workspace.lanes]);
   const sweep = lastRun?.id === active?.id && lastRun ? lastRun.sweep : active && USE_MOCK_API ? sampleRun.sweep : undefined;
   const activeSweep = useMemo(() => sweep ?? parseSweep((active?.snapshot.lanes[0] ?? workspace.lanes[0])?.files["benchmark.perf"] ?? "").sweep, [sweep, active?.snapshot.lanes, workspace.lanes]);
-  const ratios = laneRatio(rows, activeLanes, "cycles", "min");
+  const metric = USE_MOCK_API || rows.some((row) => row.metrics.cycles) ? "cycles" : "timeNs";
+  const ratios = laneRatio(rows, activeLanes, metric, "min");
   const sizeName = activeSweep.find((entry) => entry.name === "N")?.name ?? activeSweep[0]?.name ?? "";
-  const settings = useMemo(() => ({ ...defaultChart, x: sizeName, size: sizeName, normalize: sizeName ? "element" as const : "raw" as const }), [sizeName]);
+  const settings = useMemo<ChartSettings>(() => ({ ...defaultChart, metric, x: sizeName, size: sizeName, normalize: sizeName ? "element" as const : "raw" as const }), [metric, sizeName]);
   const running = pending || Boolean(active && ["queued", "building", "running"].includes(active.status));
   const logs = active?.events ?? [];
   const onSweepEdit = (lane: Lane, sweepText: string) => {
@@ -68,6 +69,7 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
       {layout.panel === "live" && <div className="live-grid">
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading chart…</div>}>
           <Instrument rows={rows} lanes={activeLanes} machine={lastRun?.machine ?? machine} sweep={activeSweep} settings={settings} beam={running}
+            caption={rows.length ? "Each point is one measured input. Lower points mean less time or fewer timer ticks per element." : undefined}
             tableHref={active && !running ? `/results/${active.id}#results-table` : "#quick-results"} />
         </Suspense>
         <aside className="live-readouts">
@@ -94,12 +96,13 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
         </aside>
       </div>}
       {layout.panel === "sweep" && <div className="sweep-content">
-        <div className="section-line"><h3>Sweep parameters</h3><span className="chip">{num.format(laneSweeps.reduce((count, lane) => count + lane.permutations, 0))} permutations across {num.format(laneSweeps.length)} {laneSweeps.length === 1 ? "lane" : "lanes"}</span></div>
-        {laneSweeps.map(({ lane, sweep: entries, errors, permutations }) => <section className="sweep-lane" key={lane.id}>
+        <div className="section-line"><h3>Sweep parameters</h3><span className="chip">Up to {MAX_PERMUTATIONS} combinations</span></div>
+        <p className="help-text">Each lane runs every combination of the values you list. For example, 4 sizes × 3 strides gives 12 combinations.</p>
+        {laneSweeps.map(({ lane, sweep: entries, errors }) => <section className="sweep-lane" key={lane.id}>
           <LaneBadge lane={lane} /><div>{errors.length ? <ul className="error-text">{errors.map((error) => <li key={error}>{error}</li>)}</ul>
             : entries.length ? entries.map((entry) => <div className="param-chips" key={entry.name}><code>{entry.name}</code>{entry.values.map((value, index) => <span className="chip mono" key={index}>{param(entry.name, value)}</span>)}</div>)
               : <p className="help-text">No sweep parameters. Add a #sweep section to try multiple values.</p>}
-            {entries.length > 0 && <p className="help-text">{num.format(permutations)} permutations</p>}
+            {entries.length > 0 && <p className="help-text"><span className="mono">{entries.map((entry) => num.format(entry.values.length)).join(" × ")}{entries.length > 1 ? ` = ${num.format(sweepCombinations(entries))}` : ""}</span> combinations</p>}
             {lane.mode === "ejected" && editable && <label className="sweep-code">Sweep in code mode
               <textarea spellCheck={false} key={lane.files["benchmark.perf"]} defaultValue={/^#sweep[ \t]*\r?\n([^]*?)(?=^#\w|(?![^]))/m.exec(lane.files["benchmark.perf"] ?? "")?.[1].trim()} onBlur={(e) => { if (e.target.value !== e.target.defaultValue) onSweepEdit(lane, e.target.value); }} />
               <small>Enter one parameter list per line.</small>

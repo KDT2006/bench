@@ -200,3 +200,17 @@ test("Gemini quota and invalid output return actionable errors", async () => {
   }));
   await assert.rejects(invalid(input), { status: 502, message: /unexpected response/ });
 });
+
+test("sweeps accept 256 combinations and reject a larger cross product", async () => {
+  const values = Array.from({ length: 16 }, (_, index) => index + 1);
+  const dsl = (width) => `#sweep\nN = [${values}]\nstride = [${width === 16 ? values : [...values, 17]}]\n#bench\nsink(N)\n`;
+  const valid = await (await request("/parse", "POST", { dsl: dsl(16) })).json();
+  assert.equal(valid.permutations, 256);
+  assert.deepEqual(valid.errors, []);
+
+  const workspace = structuredClone(sample.workspaceSnapshot);
+  workspace.lanes[0].files["benchmark.perf"] = dsl(17);
+  const response = await request("/runs", "POST", { workspace });
+  assert.equal(response.status, 422);
+  assert.match((await response.json()).message, /256/);
+});

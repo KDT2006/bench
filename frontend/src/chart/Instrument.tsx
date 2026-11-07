@@ -83,7 +83,7 @@ export default function Instrument({ rows, scaleRows = rows, lanes, machine, swe
       const cacheSizes = machine?.caches.filter((cache) => ["L1d", "L2", "L3"].includes(cache.level)) ?? [];
       const minX = isNumeric ? Math.min(...xValues.map(Number)) : 0;
       const maxX = isNumeric ? Math.max(...xValues.map(Number)) : 1;
-      const showBands = settings.caches && numericX && xName === settings.size && settings.type !== "scatter";
+      const showBands = settings.caches && cacheSizes.length > 0 && numericX && xName === settings.size && settings.type !== "scatter";
       const groupValues = sweep.find((entry) => entry.name === settings.group)?.values ?? [null];
       const categoryLabels = xValues.map((v) => param(xName, v));
       const axes = { axisLine: { lineStyle: { color: hairline } }, axisLabel: { color: secondary, fontFamily: mono, fontSize: compact ? 9 : 10, hideOverlap: true }, splitLine: { lineStyle: { color: grid } }, axisTick: { show: false } };
