@@ -47,7 +47,6 @@ Base URL: `VITE_API_BASE_URL` (default `/api`). Every path below is relative to 
 | GET | `/machines` | — | 200 | `Machine[]` |
 | GET | `/examples` | — | 200 | `Example[]` |
 | POST | `/parse` | `{ dsl: string }` | 200 | `ParseResponse` |
-| POST | `/scaffold` | `{ dsl: string, language: Lang, arch: Arch }` | 200 | `ScaffoldResponse` |
 | POST | `/runs` | `{ workspace: Workspace }` | **202** | `{ runId: string }` |
 | GET | `/runs/{id}` | — | 200 | `Run` |
 | GET | `/runs/{id}/events` | — | 200 | `text/event-stream` of `RunEvent` (A.4) |
@@ -163,7 +162,6 @@ interface Machine extends MachineSnapshot {
 }
 
 interface ParseResponse { sweep: SweepParam[]; permutations: number; errors: string[] }
-interface ScaffoldResponse { code: string; warnings: string[]; cached: boolean; model: string }
 interface ShareSnapshot { workspace: Workspace; runId?: string }
 interface Example { id: string; category: string; description: string; workspace: Workspace; runId?: string }
 ```
@@ -173,7 +171,7 @@ interface Example { id: string; category: string; description: string; workspace
 - `title`, `createdAt`, `updatedAt` are strings. `linkDsl` is a boolean.
 - `lanes` has 1–4 entries. Each lane has a non-empty, unique `id`, a `language` in `Lang`, an `arch` in `Arch`, a `mode` in `Mode`, and `files`, `build`, `runner` as objects.
 - `POST /runs` only: each `benchmark.perf` that is present must be a string, and `parseSweep` must return no errors (`422` with the first error). This includes the limit of **200 permutations**.
-- `POST /runs` only: each lane must contain its harness file (`harness.go` for Go, `harness.py` for Python). The website generates scaffold harnesses with `/scaffold` before it calls `/runs`.
+- `POST /runs` only: each lane must contain its harness file (`harness.go` for Go, `harness.py` for Python). The website translates `benchmark.perf` into the harness in the browser before it calls `/runs`. The server does not generate code.
 
 Sweep value syntax (`#sweep` section): `name = [v1, v2, …]`. Numbers may have the suffixes `K`/`Ki` (×1024), `M`/`Mi` (×1024²) or `G`/`Gi` (×1024³), with an optional trailing `B`. Strings are double-quoted. Values reach the agent already parsed as numbers or strings.
 
@@ -559,7 +557,7 @@ These are facts about the code today. Each one changes what the agent can send.
 5. **Hardware counters are Linux-only.** Go has only `counter_linux.go`, so it does not build on Windows or macOS (`NewCounter` is undefined). Go also has no `platform_darwin.go`. Python raises `NotImplementedError` in `NewCounter` on non-Linux systems. Both profilers stop the whole run if a counter cannot be opened, for example when `perf_event_paranoid` blocks it. Supporting `cacheMisses: null` needs the counters to be optional in `Start`.
 6. **No warmup, `maxReps`, or explicit core in the profilers.** `Start` only takes a time window. The agent (or `Start`) must add warmup, the `maxReps` stop and `core` pinning. Python pins to the lowest CPU in its current affinity set. Go only calls `runtime.LockOSThread()`, which does not pin to a core.
 7. **The website treats `cycles` as a perf counter.** `LaneOptions.tsx` disables `cycles` when `machine.perfCounters` is false. In this system `cycles` comes from the timer and is always available. Only `cacheMisses` (and later `branchMisses`) need perf counters.
-8. **The harness entry contract is not defined yet.** The sample harness (`func benchmark(arr []byte) uint64`) does not receive `params`, run `#setup`/`#clean`, or report `byteCount`. The agent needs a fixed contract: how it passes `params` and calls setup, bench and cleanup, and how the harness returns `byteCount`. That contract must be written before the agent can produce `perm.result`.
+8. **The harness entry contract is not defined yet.** The sample harness (`func benchmark(arr []byte) uint64`) does not receive `params`, run `#setup`/`#clean`, or report `byteCount`. The website's code generator and the agent need a shared contract: how the agent passes `params` and calls setup, bench and cleanup, and how the harness returns `byteCount`. That contract must be written before the agent can produce `perm.result`.
 9. `print.go` still prints "L1 data misses / branch misses: unavailable (counters disabled in profiler)" even though Go now measures them. This affects only human-readable output.
 
 ---
