@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#E6E9EC" />
+    <meta name="description" content="Benchscope is a workbench for microbenchmarks." />
+    <title>Benchscope</title>
+    <link rel="preload" href="/node_modules/@fontsource-variable/mona-sans/files/mona-sans-latin-standard-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/node_modules/@fontsource-variable/martian-mono/files/martian-mono-latin-standard-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <script>
+      try {
+        const settings = JSON.parse(localStorage.getItem("benchscope-settings") || "null");
+        const theme = settings?.state?.theme;
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
