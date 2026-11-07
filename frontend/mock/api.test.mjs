@@ -108,3 +108,34 @@ test("benches, immutable shares and examples round-trip", async () => {
   assert.equal((await (await request("/examples")).json())[0].runId, sample.id);
   assert.deepEqual(await (await request(`/runs/${sample.id}`)).json(), sample);
 });
+
+test("every example lane opens with valid benchmark code", async () => {
+  const { diagnostics } = await server.ssrLoadModule("/src/model/dsl.ts");
+  const examples = await (await request("/examples")).json();
+  assert.equal(examples.length, 6);
+  for (const { workspace } of examples) {
+    for (const lane of workspace.lanes) {
+      const source = lane.files["benchmark.perf"];
+      assert.match(source, /^#bench\s*$/m, workspace.title);
+      assert.deepEqual(diagnostics(source), [], workspace.title);
+    }
+  }
+});
+
+test("wide positive lane gaps use a log axis unless explicitly overridden", async () => {
+  const { defaultChart, shouldUseLogYAxis } = await server.ssrLoadModule("/src/chart/config.tsx");
+  const { formatRatio } = await server.ssrLoadModule("/src/model/format.ts");
+  const lanes = sample.workspaceSnapshot.lanes;
+  const [first, second] = sample.rows;
+  assert.notEqual(first.laneId, second.laneId);
+  assert.equal(shouldUseLogYAxis(sample.rows, lanes, defaultChart), true);
+  assert.equal(shouldUseLogYAxis([first], lanes, defaultChart), false);
+  assert.equal(shouldUseLogYAxis([{ ...first }, { ...first, laneId: second.laneId }], lanes, defaultChart), false);
+  assert.equal(shouldUseLogYAxis(sample.rows, lanes, { ...defaultChart, yScale: "linear" }), false);
+  assert.equal(shouldUseLogYAxis(sample.rows, lanes, { ...defaultChart, type: "ratio" }), false);
+
+  const withZero = structuredClone(sample.rows);
+  withZero[0].metrics.cycles.min = 0;
+  assert.equal(shouldUseLogYAxis(withZero, lanes, defaultChart), false);
+  assert.equal(formatRatio(60.391), "60×");
+});

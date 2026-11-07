@@ -1,5 +1,9 @@
 import type { Lane, ResultRow, Stat } from "../api/types";
 export const num = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
+const ratioNumber = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 2 });
+export function formatRatio(value: number | undefined) {
+  return value === undefined || !Number.isFinite(value) ? "—" : `${ratioNumber.format(value)}×`;
+}
 export const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 export const laneColors = { A: "#E6A23C", B: "#5DB7EA", C: "#D486B2", D: "#2FBF94" };
 export const laneVar = (lane: Lane["label"]) => `var(--lane-${lane.toLowerCase()})`;

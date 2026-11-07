@@ -54,7 +54,7 @@ export default function Landing() {
       </motion.div>
       <div className="hero-instrument">
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading sweep…</div>}>
-          <Instrument title="Array sum sweep" rows={reduced ? sampleRun.rows : sampleRun.rows.slice(0, count)} lanes={fixture.lanes} machine={machine}
+          <Instrument title="Array sum sweep" scaleRows={sampleRun.rows} rows={reduced ? sampleRun.rows : sampleRun.rows.slice(0, count)} lanes={fixture.lanes} machine={machine}
             sweep={sampleRun.sweep} caption="Sample replay · Synthetic Go and Python fixture" beam={!reduced && count < sampleRun.rows.length}
             tableHref={`/results/${sampleRun.id}#results-table`} />
         </Suspense>

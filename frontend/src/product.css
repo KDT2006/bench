@@ -76,29 +76,6 @@
   .editor-slot { flex: 1 1 auto; min-height: 278px; display: flex; flex-direction: column; }
   .editor-frame { position: relative; min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
   .editor-host { flex: 1 1 auto; min-height: 0; }
-  .editor-host .cm-editor { color: var(--text-2); height: 100%; min-height: 100%; max-height: 460px; }
-  .editor-host .cm-editor.cm-focused { outline: 2px solid var(--text-1); outline-offset: -2px; }
-  .editor-host .cm-scroller { font-family: var(--font-code); font-size: inherit; line-height: 1.7; }
-  .editor-host .cm-content { padding: 8px 0 12px; }
-  .editor-host .cm-line { padding-inline: 8px; }
-  .editor-host .cm-gutters { color: var(--text-2); background: var(--panel); border-right: 1px solid var(--hairline); }
-  .editor-host .cm-activeLine, .editor-host .cm-activeLineGutter { background: var(--graticule); }
-  .editor-host .cm-editor .cm-cursor, .editor-host .cm-dropCursor { border-color: var(--text-1); }
-  .editor-host .cm-editor .cm-selectionBackground, .editor-host .cm-editor.cm-focused .cm-selectionBackground, .editor-host .cm-content ::selection { background: color-mix(in srgb, var(--text-1) 20%, var(--panel)); }
-  .editor-host .cm-matchingBracket { color: var(--text-1); background: var(--raised); }
-  .cm-token-comment { color: var(--text-2); opacity: 0.9; }
-  .cm-token-keyword { color: var(--text-1); font-weight: 600; }
-  .cm-token-literal { color: var(--literal); }
-  .cm-token-builtin { color: var(--text-1); text-decoration: underline dotted; text-underline-offset: 3px; }
-  .cm-directive { background: linear-gradient(var(--hairline), var(--hairline)) 0 50% / 100% 1px no-repeat; }
-  .cm-directive.cm-activeLine { background: linear-gradient(var(--hairline), var(--hairline)) 0 50% / 100% 1px no-repeat; }
-  .cm-directive-name { padding-right: 8px; background: var(--panel); }
-  .editor-host .cm-tooltip { background: var(--raised); color: var(--text-1); border: 1px solid var(--hairline); border-radius: var(--radius-control); }
-  .editor-host .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--text-1); color: var(--canvas); }
-  .editor-help { padding: 8px 10px; max-width: min(290px, 70vw); }
-  .editor-help p, .editor-help a { font: var(--size-small)/1.4 var(--font-ui); }
-  .editor-help a { text-decoration: underline; }
-  .editor-host .cm-lintRange-error { text-decoration: underline wavy var(--error); text-underline-offset: 3px; background-image: none; }
   .editor-mode { padding: 4px 10px; border-top: 1px solid var(--hairline); font: var(--size-small)/1.4 var(--font-code); }
   .editor-skeleton { padding: 16px; color: var(--text-2); min-height: 170px; align-content: start; font-size: var(--size-small); }
   .lane-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; border-top: 1px solid var(--hairline); padding: 8px 12px; }
@@ -202,7 +179,6 @@
   .snapshot-details > p { padding-inline: 12px; }
   .snapshot-details .machine-details { max-width: 540px; }
   .read-editor { min-width: 0; background: var(--panel); padding: 4px; display: flex; }
-  .read-editor .editor-host .cm-editor { min-height: 140px; max-height: 330px; }
 
   /* Landing */
   .landing-nav { position: fixed; z-index: var(--layer-sticky); top: 16px; left: 16px; right: 16px; display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 14px; margin-inline: auto; max-width: var(--page-width); border: 1px solid var(--hairline); border-radius: var(--radius-panel); background: color-mix(in srgb, var(--canvas) 84%, transparent); backdrop-filter: blur(16px); }
@@ -420,3 +396,29 @@
     .landing-nav { background: var(--canvas); backdrop-filter: none; }
   }
 }
+
+/* CodeMirror injects unlayered defaults, so its overrides also need to be unlayered. */
+.editor-host .cm-editor { color: var(--text-2); height: 100%; min-height: 100%; max-height: 460px; }
+.editor-host .cm-editor.cm-focused { outline: 2px solid var(--text-1); outline-offset: -2px; }
+.editor-host .cm-scroller { font-family: var(--font-code); font-size: inherit; line-height: 1.7; }
+.editor-host .cm-content { padding: 8px 0 12px; }
+.editor-host .cm-line { padding-inline: 8px; }
+.editor-host .cm-editor .cm-gutters { color: var(--text-2); background: var(--panel); border-right: 1px solid var(--hairline); }
+.editor-host .cm-editor .cm-activeLine, .editor-host .cm-editor .cm-activeLineGutter { background: var(--graticule); }
+.editor-host .cm-editor .cm-cursor, .editor-host .cm-dropCursor { border-color: var(--text-1); }
+.editor-host .cm-editor .cm-selectionBackground, .editor-host .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .editor-host .cm-content ::selection { background: color-mix(in srgb, var(--text-1) 20%, var(--panel)); }
+.editor-host .cm-matchingBracket { color: var(--text-1); background: var(--raised); }
+.cm-token-comment { color: var(--text-2); opacity: 0.9; }
+.cm-token-keyword { color: var(--text-1); font-weight: 600; }
+.cm-token-literal { color: var(--literal); }
+.cm-token-builtin { color: var(--text-1); text-decoration: underline dotted; text-underline-offset: 3px; }
+.cm-directive { background: linear-gradient(var(--hairline), var(--hairline)) 0 50% / 100% 1px no-repeat; }
+.editor-host .cm-editor .cm-directive.cm-activeLine { background: linear-gradient(var(--hairline), var(--hairline)) 0 50% / 100% 1px no-repeat; }
+.cm-directive-name { padding-right: 8px; background: var(--panel); }
+.editor-host .cm-editor .cm-tooltip { background: var(--raised); color: var(--text-1); border: 1px solid var(--hairline); border-radius: var(--radius-control); }
+.editor-host .cm-editor .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--text-1); color: var(--canvas); }
+.editor-help { padding: 8px 10px; max-width: min(290px, 70vw); }
+.editor-help p, .editor-help a { font: var(--size-small)/1.4 var(--font-ui); }
+.editor-help a { text-decoration: underline; }
+.editor-host .cm-lintRange-error { text-decoration: underline wavy var(--error); text-underline-offset: 3px; background-image: none; }
+.read-editor .editor-host .cm-editor { min-height: 140px; max-height: 330px; }

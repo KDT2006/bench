@@ -22,7 +22,7 @@ export const exampleFixtures: Example[] = [{
   description: "Sum an array in Go and Python as its size grows.",
   workspace: sampleRun.workspaceSnapshot,
   runId: sampleRun.id,
-}, ...scenarios.map(([id, title, category, description, dsl]) => ({
+}, ...scenarios.map(([id, title, category, description, , dsl]) => ({
   id, category, description, workspace: {
     ...sampleRun.workspaceSnapshot, title, linkDsl: id !== "branch-prediction", lanes: sampleRun.workspaceSnapshot.lanes.map((lane) => ({
       ...lane,
