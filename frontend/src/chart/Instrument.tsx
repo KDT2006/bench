@@ -4,15 +4,16 @@ import { BarChart, BoxplotChart, HeatmapChart, LineChart, ScatterChart } from "e
 import { GridComponent, MarkAreaComponent, MarkLineComponent, TooltipComponent, VisualMapComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { Lane, MachineSnapshot, ResultRow, SweepParam } from "../api/types";
-import { bytes, laneVar, languages, metricNames, num, param, params } from "../model/format";
+import { bytes, formatRatio, laneVar, languages, metricNames, num, param, params } from "../model/format";
 import { usePreferences } from "../shell/preferences";
 
 use([LineChart, BarChart, ScatterChart, BoxplotChart, HeatmapChart, GridComponent, MarkLineComponent, MarkAreaComponent, TooltipComponent, VisualMapComponent, CanvasRenderer]);
 
-import { defaultChart, shapes, laneRatio, measurement, type ChartSettings } from "./config";
+import { defaultChart, shapes, laneRatio, measurement, shouldUseLogYAxis, type ChartSettings } from "./config";
 
 interface Props {
   rows: ResultRow[];
+  scaleRows?: ResultRow[];
   lanes: Lane[];
   machine?: MachineSnapshot;
   sweep: SweepParam[];
@@ -32,7 +33,7 @@ function quantile(sorted: number[], q: number) {
   return sorted[low] + (sorted[Math.ceil(index)] - sorted[low]) * (index - low);
 }
 
-export default function Instrument({ rows, lanes, machine, sweep, settings = defaultChart, caption, title = "Live sweep", compact, beam, loading, onExport, tableHref }: Props) {
+export default function Instrument({ rows, scaleRows = rows, lanes, machine, sweep, settings = defaultChart, caption, title = "Live sweep", compact, beam, loading, onExport, tableHref }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const instance = useRef<EChartsType | null>(null);
   const theme = usePreferences((s) => s.theme);
@@ -42,6 +43,7 @@ export default function Instrument({ rows, lanes, machine, sweep, settings = def
   const y = sweep.find(({ name }) => name !== x?.name);
   const xName = x?.name ?? "Permutation";
   const ratio = laneRatio(rows, lanes, settings.metric, settings.stat);
+  const logY = shouldUseLogYAxis(scaleRows, lanes, settings);
   const labels = lanes.map((lane) => `${lane.label} · ${lane.name || languages[lane.language]}`);
   const heading = settings.type === "ratio" ? "Ratio to lane A" : `${metricNames[settings.metric]}${settings.normalize === "raw" ? "" : ` per ${settings.normalize}`}`;
   const xValues = x?.values ?? ["Default"];
@@ -101,7 +103,7 @@ export default function Instrument({ rows, lanes, machine, sweep, settings = def
           const value = settings.type === "ratio" ? ratio(row) : measurement(row, settings);
           return { name: params(row.params), value: [
             settings.type === "scatter" ? row.metrics[settings.compareMetric]?.[settings.stat] : numericX ? Number(coordinate) : param(xName, coordinate),
-            value !== undefined && (!settings.logY || value > 0) ? value : null,
+            value !== undefined && (!logY || value > 0) ? value : null,
           ] };
         }).sort((a, b) => typeof a.value[0] === "number" && typeof b.value[0] === "number" ? a.value[0] - b.value[0] : 0);
         const type = settings.type === "bars" ? "bar" : settings.type === "scatter" ? "scatter" : "line";
@@ -149,7 +151,7 @@ export default function Instrument({ rows, lanes, machine, sweep, settings = def
           : { ...axes, type: "category", data: categoryLabels, name: xName };
       const yAxis = settings.type === "heatmap" && y
         ? { ...axes, type: "category", data: y.values.map((v) => param(y.name, v)), name: y.name }
-        : { ...axes, type: settings.logY ? "log" : "value", name: settings.type === "distribution" ? "Cycles / repetition" : heading };
+        : { ...axes, type: logY ? "log" : "value", logBase: 2, name: settings.type === "distribution" ? "Cycles / repetition" : heading };
       chart.setOption({
         animation: false, textStyle: { color: primary, fontFamily: mono }, color: colors,
         grid: { left: compact ? 38 : 64, right: compact ? 16 : 34, top: compact ? 16 : 38, bottom: compact ? 24 : 45 },
@@ -167,8 +169,15 @@ export default function Instrument({ rows, lanes, machine, sweep, settings = def
             const values = points.filter((p) => Array.isArray(p.value) && p.value[1] != null);
             const first = values[0];
             if (!first) return "";
-            const lines = values.map((p) => `${p.seriesName}  ${p.value.slice(settings.type === "heatmap" ? 2 : 1).map((v) => typeof v === "number" ? num.format(v) : String(v)).join(" · ")}${settings.type === "ratio" ? "×" : ""}`);
-            if (values.length === 2 && settings.type === "line" && Number(values[0].value[1])) lines.push(`B/A  ${num.format(Number(values[1].value[1]) / Number(values[0].value[1]))}×`);
+            const lines = values.map((p) => {
+              const display = settings.type === "ratio"
+                ? formatRatio(Number(p.value[1]))
+                : p.value.slice(settings.type === "heatmap" ? 2 : 1).map((v) => typeof v === "number" ? num.format(v) : String(v)).join(" · ");
+              return `${p.seriesName}  ${display}`;
+            });
+            if (values.length === 2 && settings.type === "line" && Number(values[0].value[1])) {
+              lines.push(`B/A  ${formatRatio(Number(values[1].value[1]) / Number(values[0].value[1]))}`);
+            }
             return [first.name || param(xName, String(first.value[0])), ...lines].join("\n");
           },
         },
@@ -177,11 +186,11 @@ export default function Instrument({ rows, lanes, machine, sweep, settings = def
     redraw();
     system.addEventListener("change", redraw);
     return () => system.removeEventListener("change", redraw);
-  }, [rows, lanes, machine, sweep, settings, theme, compact, beam, x, y, xName, xValues, isNumeric, numericX, heading, labels, ratio]);
+  }, [rows, lanes, machine, sweep, settings, theme, compact, beam, logY, x, y, xName, xValues, isNumeric, numericX, heading, labels, ratio]);
 
   return <figure className={`instrument${compact ? " instrument-compact" : ""}`}>
     <div className="instrument-screen">
-      {!compact && <div className="instrument-head"><div><h2>{title}</h2><span>{heading}</span></div>
+      {!compact && <div className="instrument-head"><div><h2>{title}</h2><span>{heading}{logY ? " · Log Y" : ""}</span></div>
         <div className="instrument-legend">{lanes.map((lane, index) => <span key={lane.id} style={{ "--channel": laneVar(lane.label) } as React.CSSProperties}><i className={`marker marker-${shapes[lane.label]}`} aria-hidden="true" />{labels[index]}</span>)}</div>
       </div>}
       <div className="instrument-plot" ref={host} aria-hidden="true" />

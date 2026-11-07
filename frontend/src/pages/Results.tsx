@@ -1,15 +1,15 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState, type VisibilityState } from "@tanstack/react-table";
+import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type CellContext, type ColumnDef, type SortingState, type VisibilityState } from "@tanstack/react-table";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { ArrowUpIcon } from "@phosphor-icons/react/dist/csr/ArrowUp";
 import { getRun } from "../api/client";
 import { USE_MOCK_API } from "../api/config";
 import type { FileName, ResultRow, Run, Stat } from "../api/types";
-import { chartTypes, defaultChart, LaneBadge, laneRatio, type ChartSettings, type ChartType, type Normalize } from "../chart/config";
-import { bytes, date, duration, harness, laneVar, languages, metricNames, num, param, type Metric } from "../model/format";
+import { chartTypes, defaultChart, LaneBadge, laneRatio, type ChartSettings, type ChartType, type Normalize, type YScale } from "../chart/config";
+import { bytes, date, duration, formatRatio, harness, laneVar, languages, metricNames, num, param, type Metric } from "../model/format";
 import { MachineDetails } from "../shell/MachineDetails";
 import { download } from "../model/download";
 import { ShareDialog } from "./ShareDialog";
@@ -39,7 +39,13 @@ function finding(run: Run) {
   const values = cohort.map((pair) => pair.ratio).sort((x, y) => x - y);
   const mid = (values[Math.floor((values.length - 1) / 2)] + values[Math.ceil((values.length - 1) / 2)]) / 2;
   if (cohort.some(({ ratio }) => mid >= 1 ? ratio <= 1 : ratio >= 1) || (mid >= 0.95 && mid <= 1.05)) return { text: "The faster lane depends on the input size. Use the ratio chart to see where they differ." };
-  return { value: show(Math.max(mid, 1 / mid), "×"), text: `Lane ${mid >= 1 ? a.label : b.label} used fewer cycles than lane ${mid >= 1 ? b.label : a.label} ${beyond.length && l2 ? `above ${bytes(l2)} (L2)` : "across matched parameters"}. Median ratio of minimum cycles.` };
+  const [faster, slower] = mid >= 1 ? [a, b] : [b, a];
+  const label = (lane: typeof a) => lane.name || (a.language === b.language ? `Lane ${lane.label}` : languages[lane.language]);
+  const range = beyond.length && l2 ? `past L2 (${bytes(l2)})` : "across matched parameters";
+  return {
+    value: formatRatio(Math.max(mid, 1 / mid)),
+    text: `${label(faster)} used fewer cycles than ${label(slower)} ${range}. Median ratio of minimum cycles.`,
+  };
 }
 
 function exportCsv(run: Run) {
@@ -86,7 +92,10 @@ function ResultTable({ run, settings }: { run: Run; settings: ChartSettings }) {
       })] : []),
       numeric("reps", "Reps", (row) => row.reps),
       ...(["pageFaults", "cacheMisses", "throughput"] as const).map((key) => numeric(key, metricNames[key], (row) => row.metrics[key]?.min)),
-      ...(lanes.length > 1 ? [numeric("ratio", `Ratio to ${lanes[0].label}`, ratio, "×")] : []),
+      ...(lanes.length > 1 ? [{
+        ...numeric("ratio", `Ratio to ${lanes[0].label}`, ratio),
+        cell: (cell: CellContext<ResultRow, unknown>) => formatRatio(cell.getValue() as number | undefined),
+      }] : []),
     ];
   }, [lanes, run.rows, run.sweep, settings.metric, settings.stat, settings.size, settings.normalize]);
   const data = useMemo(() => run.rows.filter((row) => (!laneFilter || laneFilter === row.laneId) &&
@@ -149,11 +158,13 @@ function RunView({ run }: { run: Run }) {
   const normalize: Normalize = !size || norm === "raw" ? "raw" : norm === "byte" ? "byte" : "element";
   const group = run.sweep.find((entry) => entry.name === url.get("group") && entry.name !== x?.name)?.name ?? "";
   const heatLane = run.workspaceSnapshot.lanes.find((lane) => lane.id === url.get("heatLane"))?.id ?? run.workspaceSnapshot.lanes[0]?.id ?? "";
+  const requestedYScale = url.get("yScale");
+  const yScale: YScale = requestedYScale === "log" || requestedYScale === "linear" ? requestedYScale : "auto";
   const settings = useMemo<ChartSettings>(() => ({
     ...defaultChart, type: chartType, metric, stat, x: x?.name ?? "", size, normalize, group, heatLane,
     compareMetric: metrics.find((entry) => entry === url.get("against")) ?? "timeNs",
-    logX: url.get("xScale") !== "linear", logY: url.get("yScale") === "log", caches: url.get("caches") !== "off",
-  }), [chartType, metric, stat, x, size, normalize, group, heatLane, url]);
+    logX: url.get("xScale") !== "linear", yScale, caches: url.get("caches") !== "off",
+  }), [chartType, metric, stat, x, size, normalize, group, heatLane, yScale, url]);
   const insight = finding(run);
   const compareId = url.get("compare");
   const compare = useQuery({ queryKey: ["run", compareId], queryFn: ({ signal }) => getRun(compareId!, signal), enabled: Boolean(compareId && compareId !== run.id) });
@@ -178,7 +189,7 @@ function RunView({ run }: { run: Run }) {
       : <label>X axis<select value={x?.name ?? ""} disabled={!x} onChange={(e) => update("x", e.target.value)}>{!x && <option value="">Permutation</option>}{run.sweep.map(({ name }) => <option key={name}>{name}</option>)}</select></label>}
     <label>Group by<select value={group} onChange={(e) => update("group", e.target.value)}><option value="">Lane</option>{run.sweep.filter(({ name }) => name !== x?.name).map(({ name }) => <option key={name}>{name}</option>)}</select></label>
     <div className="field-grid"><label>X scale<select value={settings.logX ? "log" : "linear"} onChange={(e) => update("xScale", e.target.value)}><option value="log">Log</option><option value="linear">Linear</option></select></label>
-      <label>Y scale<select value={settings.logY ? "log" : "linear"} onChange={(e) => update("yScale", e.target.value)}><option value="linear">Linear</option><option value="log">Log</option></select></label></div>
+      <label>Y scale<select value={settings.yScale} disabled={chartType === "heatmap"} onChange={(e) => update("yScale", e.target.value === "auto" ? "" : e.target.value)}><option value="auto">Auto</option><option value="linear">Linear</option><option value="log">Log</option></select></label></div>
     <label>Normalize<select value={normalize} disabled={!size} onChange={(e) => update("normalize", e.target.value)}><option value="raw">Raw</option><option value="element">Per element</option><option value="byte">Per byte</option></select></label>
     <label>Size parameter<select value={size} onChange={(e) => update("size", e.target.value)}>{!size && <option value="">Select a parameter</option>}{sizes.map(({ name }) => <option key={name}>{name}</option>)}</select></label>
     {chartType === "heatmap" && <label>Lane<select value={heatLane} onChange={(e) => update("heatLane", e.target.value)}>{run.workspaceSnapshot.lanes.map((lane) => <option value={lane.id} key={lane.id}>Lane {lane.label}</option>)}</select></label>}

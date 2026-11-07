@@ -175,6 +175,15 @@ export function App() {
     flushEditors();
     void runBench(query);
   };
+  const renderRunControl = (showShortcut: boolean) => (
+    <button className={running ? "control run-control" : "control primary run-control"} type="button"
+      disabled={running ? cancelPending : mobile || isOffline || pending} title={runHint} onClick={runOrStop}>
+      {running ? "Cancel run" : pending ? "Preparing…" : <>
+        <PlayIcon size={14} weight="fill" aria-hidden="true" /> Run
+        {showShortcut && <kbd className="run-shortcut" aria-hidden="true">{mac ? "⌘↵" : "Ctrl+↵"}</kbd>}
+      </>}
+    </button>
+  );
   const save = () => { flushEditors(); void saveBench(query); };
   const shortMachineLabel = machine ? `${machine.cpuModel} · ${machine.status}` : machineLabel;
   const close = () => setDialog(null);
@@ -245,8 +254,7 @@ export function App() {
               </span>
             </button>
             {workbench && <div className="workbench-actions" aria-label="Workbench actions">
-              <button className={running ? "control run-control" : "control primary run-control"} type="button" disabled={running ? cancelPending : mobile || isOffline || pending}
-                title={runHint} onClick={runOrStop}>{running ? "Cancel run" : pending ? "Preparing…" : <><PlayIcon size={14} weight="fill" aria-hidden="true" /> Run <kbd className="run-shortcut" aria-hidden="true">{mac ? "⌘↵" : "Ctrl+↵"}</kbd></>}</button>
+              {renderRunControl(true)}
               <button className="control" type="button" disabled={mobile} onClick={save}>Save</button>
               <button className="control" type="button" onClick={() => { flushEditors(); setDialog("share"); }}>Share</button>
             </div>}
@@ -266,7 +274,7 @@ export function App() {
         <Suspense fallback={<div className="page route-loading loading-state" role="status"><span className="sr-only">Loading page…</span><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>}>
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/bench" element={<Workbench machines={machines.data} />} />
+            <Route path="/bench" element={<Workbench machines={machines.data} runControl={renderRunControl(false)} />} />
             <Route path="/results/:runId" element={<Results />} />
             <Route path="/examples" element={<Examples />} />
             <Route path="/guide" element={<Guide />} />

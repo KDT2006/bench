@@ -6,7 +6,7 @@ import { USE_MOCK_API } from "../api/config";
 import { sampleRun } from "../model/examples";
 import type { Lane, Machine, RunEvent, Workspace } from "../api/types";
 import { LaneBadge, defaultChart, laneRatio } from "../chart/config";
-import { laneVar, num, param, params } from "../model/format";
+import { formatRatio, laneVar, num, param, params } from "../model/format";
 import { useBench, type Panel } from "../model/state";
 import { parseSweep } from "../model/sweep";
 
@@ -87,7 +87,7 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
                 const lane = activeLanes.find((item) => item.id === row.laneId);
                 const ratio = ratios(row);
                 return <tr key={`${row.laneId}-${index}`}><td>{lane && <LaneBadge lane={lane} />}</td><td>{params(row.params)}</td><td>{row.metrics.cycles ? num.format(row.metrics.cycles.min) : "—"}</td>
-                  <td>{row.metrics.timeNs ? num.format(row.metrics.timeNs.min) : "—"}</td>{activeLanes.length > 1 && <td>{ratio === undefined ? "—" : `${num.format(ratio)}×`}</td>}</tr>;
+                  <td>{row.metrics.timeNs ? num.format(row.metrics.timeNs.min) : "—"}</td>{activeLanes.length > 1 && <td>{formatRatio(ratio)}</td>}</tr>;
               })}</tbody></table>
           </div> : <p className="help-text">Results appear as each permutation finishes.</p>}
           {active && !running && <Link className="control" to={`/results/${active.id}`}>Open full results <ArrowUpRightIcon size={14} aria-hidden="true" /></Link>}

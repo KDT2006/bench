@@ -4,6 +4,7 @@ import { cancelRun, getRun, send, startRun, subscribeToRun } from "../api/client
 import type { Lane, Run, RunEvent, ScaffoldResponse, Workspace } from "../api/types";
 import { usePreferences } from "../shell/preferences";
 import { diagnostics } from "./dsl";
+import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "./scaffoldLimits";
 import { harness, languages, num } from "./format";
 import { saveDraft, useBench, writeLocal } from "./state";
 
@@ -45,7 +46,9 @@ async function generate(lane: Lane, reportFailure: boolean): Promise<Lane> {
 }
 
 export async function generateLane(lane: Lane) {
-  const errors = diagnostics(sourceOf(lane));
+  const dsl = sourceOf(lane);
+  if (scaffoldLength(dsl) > MAX_SCAFFOLD_CHARACTERS) return state().notify({ text: scaffoldLimitMessage, error: true });
+  const errors = diagnostics(dsl);
   if (errors.length) return state().notify({ text: `Lane ${lane.label}: ${errors[0].message}`, error: true });
   try {
     await generate(lane, true);
@@ -120,6 +123,8 @@ export async function runBench(query: QueryClient) {
   if (pending || (active && !isFinished(active.status))) return;
   const invalid = workspace.lanes.flatMap((lane) => lane.mode === "scaffold" ? diagnostics(sourceOf(lane)).map(({ message }) => `Lane ${lane.label}: ${message}`) : []);
   if (invalid.length) return state().notify({ text: invalid[0], error: true });
+  const tooLong = workspace.lanes.find((lane) => isStale(lane) && scaffoldLength(sourceOf(lane)) > MAX_SCAFFOLD_CHARACTERS);
+  if (tooLong) return state().notify({ text: `Lane ${tooLong.label}. ${scaffoldLimitMessage}`, error: true });
   if (generating.length) return state().notify({ text: "Wait for code generation to finish, then run again.", error: true });
   useBench.setState({ pending: true, active: null, lastRun: null, notice: null });
   state().setLayout({ panel: "live", collapsed: false });

@@ -22,7 +22,7 @@ export const exampleFixtures: Example[] = [{
   description: "Sum an array in Go and Python as its size grows.",
   workspace: sampleRun.workspaceSnapshot,
   runId: sampleRun.id,
-}, ...scenarios.map(([id, title, category, description, dsl]) => ({
+}, ...scenarios.map(([id, title, category, description, , dsl]) => ({
   id, category, description, workspace: {
     ...sampleRun.workspaceSnapshot, title, linkDsl: id !== "branch-prediction", lanes: sampleRun.workspaceSnapshot.lanes.map((lane) => ({
       ...lane,
@@ -43,9 +43,9 @@ export function starterWorkspace(): Workspace {
   const lane = structuredClone(sampleRun.workspaceSnapshot.lanes[0]);
   const dsl = lane.files["benchmark.perf"]!;
   lane.files["benchmark.perf"] = dsl
-    .replace("#sweep\n", "#sweep\n// Try the same bench at each of these sizes.\n")
-    .replace("#setup\n", "#setup\n// Prepare the array once per permutation.\n")
-    .replace("#bench\n", "#bench\n// Only this section is measured.\n");
+    .replace("#sweep\n", "#sweep\n// Sizes to try\n")
+    .replace("#setup\n", "#setup\n// Prepare data\n")
+    .replace("#bench\n", "#bench\n// Timed work\n");
   delete lane.files[harness(lane.language)];
   return { title: "Untitled bench", linkDsl: true, lanes: [lane], createdAt: now, updatedAt: now };
 }

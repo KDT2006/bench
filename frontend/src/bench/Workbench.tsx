@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
@@ -17,6 +17,7 @@ import { generateLane, isStale, runBench } from "../model/actions";
 import { freshWorkspace, replaceWorkspace, useBench, validWorkspace } from "../model/state";
 import { harness, laneColors, laneVar, languages } from "../model/format";
 import { starterWorkspace } from "../model/examples";
+import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "../model/scaffoldLimits";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
 import LaneOptions from "./LaneOptions";
@@ -75,6 +76,8 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
   const oldCode = useRef<string | undefined>(undefined);
   const harnessName = harness(lane.language);
   const harnessText = lane.files[harnessName];
+  const dslLength = scaffoldLength(lane.files["benchmark.perf"] ?? "");
+  const dslTooLong = dslLength > MAX_SCAFFOLD_CHARACTERS;
   const compiling = events?.findLast(({ event }) => event.type === "build_done" && event.laneId === lane.id)?.event;
   const issue = compiling?.type === "build_done" && !compiling.ok ? compiling.log : undefined;
   const issueLine = issue ? Number(/(?:line\s+|:)(\d+)/i.exec(issue)?.[1]) : 0;
@@ -177,6 +180,12 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
       </div>
       <span className={`file-state${issue ? " error-text" : ""}`} title={status}>{status}</span>
     </div>
+    {file === "benchmark.perf" && lane.mode === "scaffold" && editable && (
+      <div className={`editor-note${dslTooLong ? " error-text" : ""}`}>
+        <span>{dslLength}/{MAX_SCAFFOLD_CHARACTERS} characters for code generation</span>
+        {dslTooLong && <span role="status">{scaffoldLimitMessage}</span>}
+      </div>
+    )}
     {file === "benchmark.perf" && linked && <div className="editor-note"><LinkSimpleIcon size={14} aria-hidden="true" /> Linked benchmark.perf</div>}
     {file === "benchmark.perf" && lane.mode === "ejected" && <div className="editor-note">DSL reference. Edit sweep parameters in the Sweep tab.</div>}
     {file === harnessName && lane.mode === "scaffold" && !loadingHarness && <div className="editor-note">
@@ -202,7 +211,7 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
   </article>;
 }
 
-export function WorkspaceView({ workspace, machines, shared = false, onFork }: { workspace: Workspace; machines?: Machine[]; shared?: boolean; onFork?: () => void }) {
+export function WorkspaceView({ workspace, machines, shared = false, onFork, runControl }: { workspace: Workspace; machines?: Machine[]; shared?: boolean; onFork?: () => void; runControl?: ReactNode }) {
   const mobile = useReadOnlyWidth();
   const tabs = useMedia(tabbed);
   const [params, setParams] = useSearchParams();
@@ -220,7 +229,6 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork }: {
   const root = useRef<HTMLDivElement>(null);
   const grid = !tabs && workspace.lanes.length >= 3 && layout.grid;
   const shown = tabs ? [selectedLane] : workspace.lanes;
-  const query = useQueryClient();
 
   function select(lane: Lane, file?: FileName) {
     setParams((current) => {
@@ -332,8 +340,11 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork }: {
     {shared && <div className="bench-banner"><span>You’re viewing a shared bench. Fork it to edit and run.</span><button className="control primary" type="button" onClick={onFork}>Fork</button></div>}
     {!shared && mobile && <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div>}
     {!shared && editable && help && <div className="bench-banner">
-      <span>New here? Start from an <Link to="/examples">example</Link> or {workspace.lanes.every((lane) => machines?.some((item) => item.arch === lane.arch && item.status !== "offline")) ? <button type="button" className="text-action" onClick={() => { flushEditors(); void runBench(query); }}>run this one</button> : "run this one once the machine is ready"}.</span>
-      <button className="control icon-control" type="button" title="Dismiss tip" aria-label="Dismiss tip" onClick={() => { try { sessionStorage.setItem("benchscope-start-hidden", "yes"); } catch { /* storage can be disabled */ } setHelp(false); }}><XIcon size={16} aria-hidden="true" /></button>
+      <span>New here? Start from an <Link to="/examples">example</Link>.</span>
+      <div className="inline-controls">
+        {runControl}
+        <button className="control icon-control" type="button" title="Dismiss tip" aria-label="Dismiss tip" onClick={() => { try { sessionStorage.setItem("benchscope-start-hidden", "yes"); } catch { /* storage can be disabled */ } setHelp(false); }}><XIcon size={16} aria-hidden="true" /></button>
+      </div>
     </div>}
     {tabs && shown.length > 0 && workspace.lanes.length > 1 && <div className="tab-strip lane-switcher" aria-label="Choose lane">
       {workspace.lanes.map((lane) => <button type="button" key={lane.id} aria-pressed={selectedLane.id === lane.id} onClick={() => { flushEditors(); select(lane); }}><LaneBadge lane={lane} /> {lane.name || languages[lane.language]}</button>)}
@@ -391,7 +402,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork }: {
   </div>;
 }
 
-export default function Workbench({ machines }: { machines?: Machine[] }) {
+export default function Workbench({ machines, runControl }: { machines?: Machine[]; runControl: ReactNode }) {
   const workspace = useBench((s) => s.workspace);
   const [params, setParams] = useSearchParams();
   const exampleId = params.get("example");
@@ -425,5 +436,5 @@ export default function Workbench({ machines }: { machines?: Machine[] }) {
     navigate(location.pathname + location.search, { replace: true, state: null });
   }, [location, navigate, query]);
 
-  return <>{exampleId && examples.isError && <div className="page bench-error"><p className="error-text">The example could not be loaded.</p><button className="control" type="button" onClick={() => void examples.refetch()}>Try again</button></div>}<WorkspaceView workspace={workspace} machines={machines} /></>;
+  return <>{exampleId && examples.isError && <div className="page bench-error"><p className="error-text">The example could not be loaded.</p><button className="control" type="button" onClick={() => void examples.refetch()}>Try again</button></div>}<WorkspaceView workspace={workspace} machines={machines} runControl={runControl} /></>;
 }

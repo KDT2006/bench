@@ -3,6 +3,8 @@ import machineJson from "./fixtures/machine.json";
 import runJson from "./fixtures/run.json";
 import { exampleFixtures } from "../src/model/examples";
 import { parseSweep } from "../src/model/sweep";
+import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "../src/model/scaffoldLimits";
+import { ScaffoldGenerationError, type ScaffoldGenerator } from "../server/gemini";
 
 const machine = machineJson as MachineSnapshot;
 const sample = runJson as Run;
@@ -176,7 +178,7 @@ function subscribe(req: Request, initial: Replay, storage: MockStorage) {
   } });
 }
 
-export function makeMockApi(storage: MockStorage, scaffoldCache = new Set<string>()) {
+export function makeMockApi(storage: MockStorage, scaffoldCache = new Set<string>(), generateScaffold?: ScaffoldGenerator) {
   return async (req: Request): Promise<Response> => {
     try {
       const url = new URL(req.url);
@@ -203,6 +205,9 @@ export function makeMockApi(storage: MockStorage, scaffoldCache = new Set<string
         if (typeof dsl !== "string" || (language !== "go" && language !== "python") || (arch !== "x86_64" && arch !== "arm64")) {
           throw new ApiError(400, "Provide DSL, a supported language and a supported architecture.");
         }
+        if (scaffoldLength(dsl) > MAX_SCAFFOLD_CHARACTERS) throw new ApiError(413, scaffoldLimitMessage);
+        if (!dsl.trim()) throw new ApiError(400, "Enter benchmark pseudocode before generating code.");
+        if (generateScaffold) return json(await generateScaffold({ dsl, language, arch }));
         const source = dsl.replace(/^#sweep\b[^\n]*\n[\s\S]*?(?=^#\w|$(?![\s\S]))/gm, "");
         const model = "mock-array-sum";
         const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([source, language, arch, model])));
@@ -286,7 +291,7 @@ export function makeMockApi(storage: MockStorage, scaffoldCache = new Set<string
       }
       throw new ApiError(404, "No mock API resource matches this request.");
     } catch (error) {
-      if (error instanceof ApiError) return json({ message: error.message }, error.status);
+      if (error instanceof ApiError || error instanceof ScaffoldGenerationError) return json({ message: error.message }, error.status);
       console.error(error);
       return json({ message: "The mock request failed. Try again." }, 500);
     }
