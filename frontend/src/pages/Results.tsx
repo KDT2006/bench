@@ -12,6 +12,7 @@ import { chartTypes, defaultChart, LaneBadge, laneRatio, type ChartSettings, typ
 import { bytes, date, duration, harness, laneVar, languages, metricNames, num, param, type Metric } from "../model/format";
 import { MachineDetails } from "../shell/MachineDetails";
 import { download } from "../model/download";
+import { ShareDialog } from "./ShareDialog";
 import { EditorSkeleton } from "../bench/Workbench";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
@@ -135,6 +136,7 @@ function RunConfiguration({ run }: { run: Run }) {
 
 function RunView({ run }: { run: Run }) {
   const [url, setUrl] = useSearchParams();
+  const [share, setShare] = useState(false);
   const [controlsInitiallyOpen] = useState(() => !matchMedia("(width < 768px)").matches);
   const exportRef = useRef<(() => string) | null>(null);
   const chartType = chartTypes.find((entry) => entry === url.get("chart")) ?? "line";
@@ -190,6 +192,7 @@ function RunView({ run }: { run: Run }) {
       <div className="inline-controls">
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true }} className="control">Open in workbench</Link>
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true, rerun: true }} className="control primary">Run again</Link>
+        <button className="control" type="button" onClick={() => setShare(true)}>Share</button>
         <details className="action-menu"><summary className="control"><DownloadSimpleIcon size={16} aria-hidden="true" /> Export</summary><div className="menu-panel">
           <button type="button" onClick={() => exportCsv(run)}>CSV</button>
           <button type="button" onClick={() => download(`benchscope-${run.id}.json`, new Blob([JSON.stringify(run, null, 2)], { type: "application/json" }))}>JSON</button>
@@ -214,6 +217,7 @@ function RunView({ run }: { run: Run }) {
     </div>
     <ResultTable run={run} settings={settings} />
     <RunConfiguration run={run} />
+    {share && <ShareDialog workspace={run.workspaceSnapshot} runId={run.id} close={() => setShare(false)} />}
   </div>;
 }
 
@@ -224,6 +228,6 @@ export default function Results() {
     return status && ["queued", "building", "running"].includes(status) ? 1000 : false;
   }, retry: false });
   if (run.isPending) return <div className="page results-page"><h1>Results</h1><div className="instrument loading-plot" role="status">Loading results…</div><EditorSkeleton text="Loading result rows…" /></div>;
-  if (run.isError) return <div className="page route-stub"><h1>Results</h1><p className="error-text" role="alert">{run.error.message}</p><div className="inline-controls"><button className="control" type="button" onClick={() => void run.refetch()}>Try again</button><Link className="control" to="/bench">Open the workbench</Link></div></div>;
+  if (run.isError) return <div className="page route-stub"><h1>Results</h1><p className="error-text" role="alert">{run.error.message}</p><div className="inline-controls"><button className="control" type="button" onClick={() => void run.refetch()}>Try again</button><Link className="control" to="/benches?tab=history">Run history</Link></div></div>;
   return <RunView run={run.data} key={runId} />;
 }

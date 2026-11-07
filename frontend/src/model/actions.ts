@@ -1,7 +1,7 @@
 import { startTransition, useEffect } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { cancelRun, getRun, send, startRun, subscribeToRun } from "../api/client";
-import type { Lane, Run, RunEvent, ScaffoldResponse } from "../api/types";
+import type { Lane, Run, RunEvent, ScaffoldResponse, Workspace } from "../api/types";
 import { usePreferences } from "../shell/preferences";
 import { diagnostics } from "./dsl";
 import { harness, languages, num } from "./format";
@@ -160,6 +160,23 @@ export async function stopBench(query: QueryClient) {
     state().notify({ text: message(error), error: true });
   } finally {
     useBench.setState({ cancelPending: false });
+  }
+}
+
+export async function saveBench(query: QueryClient) {
+  const { workspace } = state();
+  try {
+    const snapshot: Workspace = { ...workspace, title: workspace.title.trim() || "Untitled bench" };
+    const saved = workspace.id ? await send<Workspace>(`/benches/${encodeURIComponent(workspace.id)}`, snapshot, "PUT")
+      : await send<Workspace>("/benches", snapshot);
+    if (state().workspace === workspace) state().setWorkspace(saved);
+    else if (state().workspace.createdAt === workspace.createdAt) {
+      state().setWorkspace({ ...state().workspace, id: saved.id }, true);
+    }
+    void query.invalidateQueries({ queryKey: ["benches"] });
+    state().notify({ text: "Saved." });
+  } catch (error) {
+    state().notify({ text: message(error), error: true });
   }
 }
 

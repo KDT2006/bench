@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
@@ -7,6 +7,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
+import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import type { Example, FileName, Lane, Machine, Workspace } from "../api/types";
 import { request } from "../api/client";
 import { download } from "../model/download";
@@ -331,7 +332,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork }: {
     {shared && <div className="bench-banner"><span>You’re viewing a shared bench. Fork it to edit and run.</span><button className="control primary" type="button" onClick={onFork}>Fork</button></div>}
     {!shared && mobile && <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div>}
     {!shared && editable && help && <div className="bench-banner">
-      <span>New here? Try the starter benchmark. You can {workspace.lanes.every((lane) => machines?.some((item) => item.arch === lane.arch && item.status !== "offline")) ? <button type="button" className="text-action" onClick={() => { flushEditors(); void runBench(query); }}>run this one</button> : "run this one once the machine is ready"}.</span>
+      <span>New here? Start from an <Link to="/examples">example</Link> or {workspace.lanes.every((lane) => machines?.some((item) => item.arch === lane.arch && item.status !== "offline")) ? <button type="button" className="text-action" onClick={() => { flushEditors(); void runBench(query); }}>run this one</button> : "run this one once the machine is ready"}.</span>
       <button className="control icon-control" type="button" title="Dismiss tip" aria-label="Dismiss tip" onClick={() => { try { sessionStorage.setItem("benchscope-start-hidden", "yes"); } catch { /* storage can be disabled */ } setHelp(false); }}><XIcon size={16} aria-hidden="true" /></button>
     </div>}
     {tabs && shown.length > 0 && workspace.lanes.length > 1 && <div className="tab-strip lane-switcher" aria-label="Choose lane">
@@ -381,6 +382,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork }: {
     {addOpen && <Overlay title="Add lane" onClose={() => setAddOpen(false)}><div className="overlay-body add-choices">
       <button type="button" className="control primary" onClick={() => add()}><PlusIcon size={16} aria-hidden="true" /> New lane</button>
       {workspace.lanes.map((lane) => <button type="button" className="control" key={lane.id} onClick={() => add(lane)}>Duplicate lane {lane.label}</button>)}
+      <Link className="control" to="/examples">From examples <ArrowUpRightIcon size={14} aria-hidden="true" /></Link>
     </div></Overlay>}
     {confirm && <Overlay title={confirm.title} onClose={() => setConfirm(null)}><div className="overlay-body">
       <p>{confirm.text}</p><div className="dialog-actions"><button type="button" className="control" onClick={() => setConfirm(null)}>{confirm.cancel ?? "Cancel"}</button>

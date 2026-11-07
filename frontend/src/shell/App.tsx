@@ -13,13 +13,18 @@ import { MachineDetails, MachineState } from "./MachineDetails";
 import { Overlay } from "./Overlay";
 import { Settings } from "./Settings";
 import { usePreferences } from "./preferences";
-import { runBench, stopBench, useDraftPersistence } from "../model/actions";
+import { runBench, saveBench, stopBench, useDraftPersistence } from "../model/actions";
 import { useBench } from "../model/state";
 import { flushEditors } from "../bench/editorSync";
+import { ShareDialog } from "../pages/ShareDialog";
 import { motion, useReducedMotion } from "motion/react";
 
 const Workbench = lazy(() => import("../bench/Workbench"));
 const Results = lazy(() => import("../pages/Results"));
+const Examples = lazy(() => import("../pages/Examples"));
+const Guide = lazy(() => import("../pages/Guide"));
+const Library = lazy(() => import("../pages/Library"));
+const Shared = lazy(() => import("../pages/Shared"));
 const mobileQuery = matchMedia("(width < 768px)");
 
 function Brand() {
@@ -54,7 +59,7 @@ const nav = [
   { path: "/benches", label: "Library" },
 ];
 
-type Dialog = "settings" | "machine" | "commands" | "shortcuts" | "menu";
+type Dialog = "settings" | "machine" | "commands" | "shortcuts" | "menu" | "share";
 
 function useTheme() {
   const theme = usePreferences((state) => state.theme);
@@ -168,6 +173,7 @@ export function App() {
     flushEditors();
     void runBench(query);
   };
+  const save = () => { flushEditors(); void saveBench(query); };
   const shortMachineLabel = machine ? `${machine.cpuModel} · ${machine.status}` : machineLabel;
   const close = () => setDialog(null);
 
@@ -175,6 +181,7 @@ export function App() {
     const handleKey = (event: KeyboardEvent) => {
       if (!dialog && !document.querySelector("dialog[open]") && workbench && !mobile && (event.metaKey || event.ctrlKey)) {
         if (event.key === "Enter") { event.preventDefault(); runOrStop(); return; }
+        if (event.key.toLowerCase() === "s") { event.preventDefault(); save(); return; }
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -197,9 +204,11 @@ export function App() {
   ];
   if (workbench && !mobile) {
     if (!pending && (!isOffline || running)) actions.push({ label: running ? "Cancel run" : "Run bench", shortcut: mac ? "⌘↵" : "Ctrl+Enter", run: () => { close(); runOrStop(); } });
+    actions.push({ label: "Save bench", shortcut: mac ? "⌘S" : "Ctrl+S", run: () => { close(); save(); } });
+    actions.push({ label: "Share bench", run: () => { flushEditors(); setDialog("share"); } });
     if (lastRunId) actions.push({ label: "Open last results", run: () => { close(); navigate(`/results/${lastRunId}`); } });
   }
-  const dialogTitles = { settings: "Settings", machine: "Machine", commands: "Command palette", shortcuts: "Keyboard shortcuts", menu: "Navigation" };
+  const dialogTitles = { settings: "Settings", machine: "Machine", commands: "Command palette", shortcuts: "Keyboard shortcuts", menu: "Navigation", share: "Share bench" };
 
   return (
     <>
@@ -231,6 +240,8 @@ export function App() {
             {workbench && <div className="workbench-actions" aria-label="Workbench actions">
               <button className={running ? "control run-control" : "control primary run-control"} type="button" disabled={running ? cancelPending : mobile || isOffline || pending}
                 title={runHint} onClick={runOrStop}>{running ? "Cancel run" : pending ? "Preparing…" : <><PlayIcon size={14} weight="fill" aria-hidden="true" /> Run <kbd className="run-shortcut" aria-hidden="true">{mac ? "⌘↵" : "Ctrl+↵"}</kbd></>}</button>
+              <button className="control" type="button" disabled={mobile} onClick={save}>Save</button>
+              <button className="control" type="button" onClick={() => { flushEditors(); setDialog("share"); }}>Share</button>
             </div>}
             <button type="button" className="control icon-control command-trigger" onClick={() => setDialog("commands")} aria-label="Command palette" title={`Command palette (${shortcut})`}>
               <CommandIcon size={20} aria-hidden="true" />
@@ -250,16 +261,17 @@ export function App() {
             <Route path="/" element={<RouteStub title="Benchscope">A workbench for microbenchmarks.</RouteStub>} />
             <Route path="/bench" element={<Workbench machines={machines.data} />} />
             <Route path="/results/:runId" element={<Results />} />
-            <Route path="/examples" element={<RouteStub title="Examples">Example benchmarks will be available here.</RouteStub>} />
-            <Route path="/guide" element={<RouteStub title="Guide">The benchmark language reference will be available here.</RouteStub>} />
-            <Route path="/benches" element={<RouteStub title="Library">Saved benches and run history will be available here.</RouteStub>} />
-            <Route path="/s/:shareId" element={<RouteStub title="Shared bench">Shared benches will be available here.</RouteStub>} />
+            <Route path="/examples" element={<Examples />} />
+            <Route path="/guide" element={<Guide />} />
+            <Route path="/benches" element={<Library />} />
+            <Route path="/s/:shareId" element={<Shared />} />
             <Route path="*" element={<RouteStub title="Page not found">Check the address or open the workbench.</RouteStub>} />
           </Routes>
         </Suspense>
       </main>
       <Toast />
-      {dialog && (
+      {dialog === "share" && <ShareDialog workspace={useBench.getState().workspace} runId={lastRunId} close={close} />}
+      {dialog && dialog !== "share" && (
         <Overlay key={dialog} title={dialogTitles[dialog]} onClose={close} drawer={dialog === "machine"} palette={dialog === "commands"}>
           {dialog === "settings" && <Settings />}
           {dialog === "machine" && (machine ? <MachineDetails machine={machine} /> : (
@@ -270,6 +282,7 @@ export function App() {
             <div><dt>Command palette</dt><dd><kbd>{shortcut}</kbd></dd></div>
             <div><dt>Keyboard shortcuts</dt><dd><kbd>?</kbd></dd></div>
             <div><dt>Run or cancel</dt><dd><kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</kbd></dd></div>
+            <div><dt>Save</dt><dd><kbd>{mac ? "⌘S" : "Ctrl+S"}</kbd></dd></div>
             <div><dt>Generate code</dt><dd><kbd>{mac ? "⌘⇧G" : "Ctrl+Shift+G"}</kbd></dd></div>
             <div><dt>Focus lane</dt><dd><kbd>{mac ? "⌘ 1–4" : "Ctrl 1–4"}</kbd></dd></div>
             <div><dt>Switch file</dt><dd><kbd>{mac ? "⌘⌥←/→" : "Ctrl+Alt+←/→"}</kbd></dd></div>
