@@ -1,6 +1,11 @@
 package profiler
 
-import "time"
+import (
+	"fmt"
+	"math"
+	"runtime"
+	"time"
+)
 
 const OSTimerFreq = 1_000_000_000
 
@@ -77,4 +82,82 @@ func GetCPUFreqWait(waitTimeMs uint64) uint64 {
 	}
 
 	return CPUFreq
+}
+
+func NewRepProfile(name string, byteCount uint64, f func(), tryForTime time.Duration, cpuFreq uint64) *RepetitionProfile {
+	return &RepetitionProfile{
+		Name:       name,
+		ByteCount:  byteCount,
+		Func:       f,
+		TryForTime: tryForTime,
+		CPUFreq:    cpuFreq,
+	}
+}
+
+func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
+	endTime := time.Now().Add(r.TryForTime)
+
+	fmt.Printf("--- %s ---\n", r.Name)
+
+	// prevent core migration
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	result := RepetitionProfileResults{
+		MinTime: math.MaxUint64,
+	}
+
+	for time.Now().Compare(endTime) == -1 {
+		var CPUStart uint64
+		var CPUEnd uint64
+
+		if fenced {
+			CPUStart = ReadCPUTimerStartFenced()
+		} else {
+			CPUStart = ReadCPUTimer()
+		}
+
+		r.Func()
+
+		if fenced {
+			CPUEnd = ReadCPUTimerEndFenced()
+		} else {
+			CPUEnd = ReadCPUTimer()
+		}
+
+		CPUElapsed := CPUEnd - CPUStart
+
+		result.TotalTime += CPUElapsed
+
+		if result.numIterations == 0 {
+			result.MinTime = CPUElapsed
+			result.MaxTime = CPUElapsed
+			result.GigabytesPerSecondMin = GBPerSec(float64(CPUElapsed), float64(r.CPUFreq), float64(r.ByteCount))
+			result.GigabytesPerSecondMax = result.GigabytesPerSecondMin
+		} else if CPUElapsed < result.MinTime {
+			result.MinTime = CPUElapsed
+		} else {
+			result.MaxTime = CPUElapsed
+		}
+
+		result.numIterations++
+	}
+
+	result.AvgTime = float64(result.TotalTime) / float64(result.numIterations)
+
+	result.GigabytesPerSecondMin = GBPerSec(float64(result.MinTime), float64(r.CPUFreq), float64(r.ByteCount))
+	result.GigabytesPerSecondMax = GBPerSec(float64(result.MaxTime), float64(r.CPUFreq), float64(r.ByteCount))
+	result.GigabytesPerSecondAvg = GBPerSec(result.AvgTime, float64(r.CPUFreq), float64(r.ByteCount))
+
+	result.PageFaultCountAvg = float64(result.totalPageFaults) / float64(result.numIterations)
+
+	return result
+}
+
+func GBPerSec(CPUElapsed, CPUFreq, byteCount float64) float64 {
+	megabyte := 1024 * 1024
+	gigabyte := megabyte * 1024
+	seconds := CPUElapsed / CPUFreq
+	bytesPerSec := byteCount / seconds
+	return bytesPerSec / float64(gigabyte)
 }
