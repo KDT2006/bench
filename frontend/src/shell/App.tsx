@@ -20,6 +20,7 @@ import { ShareDialog } from "../pages/ShareDialog";
 import { motion, useReducedMotion } from "motion/react";
 
 const Workbench = lazy(() => import("../bench/Workbench"));
+const Landing = lazy(() => import("../pages/Landing"));
 const Results = lazy(() => import("../pages/Results"));
 const Examples = lazy(() => import("../pages/Examples"));
 const Guide = lazy(() => import("../pages/Guide"));
@@ -149,6 +150,7 @@ export function App() {
     mobileQuery.addEventListener("change", notify);
     return () => mobileQuery.removeEventListener("change", notify);
   }, () => mobileQuery.matches);
+  const landing = pathname === "/";
   useEffect(() => { if (!hash) window.scrollTo(0, 0); }, [pathname, hash]);
   const mac = /Mac|iPad|iPhone/.test(navigator.platform);
   const shortcut = mac ? "⌘K" : "Ctrl+K";
@@ -213,7 +215,12 @@ export function App() {
   return (
     <>
       <a className="skip-link control primary" href="#main">Skip to content</a>
-      <header className="top-bar">
+      {landing ? <header className="landing-nav">
+        <Brand />
+        <nav aria-label="Main navigation"><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link></nav>
+        <button type="button" className="control icon-control landing-settings" aria-label="Settings" title="Settings" onClick={() => setDialog("settings")}><GearIcon size={20} aria-hidden="true" /></button>
+        <Link className="control primary" to="/bench" onMouseEnter={() => void import("../bench/Workbench")} onFocus={() => void import("../bench/Workbench")}>Open the workbench</Link>
+      </header> : <header className="top-bar">
         <div className="top-bar-inner">
           <Brand />
           <nav className="desktop-nav" aria-label="Main navigation"><NavLinks /></nav>
@@ -254,11 +261,11 @@ export function App() {
             </button>
           </div>
         </div>
-      </header>
+      </header>}
       <main id="main" tabIndex={-1}>
         <Suspense fallback={<div className="page route-loading loading-state" role="status"><span className="sr-only">Loading page…</span><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>}>
           <Routes>
-            <Route path="/" element={<RouteStub title="Benchscope">A workbench for microbenchmarks.</RouteStub>} />
+            <Route path="/" element={<Landing />} />
             <Route path="/bench" element={<Workbench machines={machines.data} />} />
             <Route path="/results/:runId" element={<Results />} />
             <Route path="/examples" element={<Examples />} />
