@@ -1,14 +1,17 @@
-import { useMemo } from "react";
+import { Suspense, lazy, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { USE_MOCK_API } from "../api/config";
 import { sampleRun } from "../model/examples";
-import type { Lane, RunEvent, Workspace } from "../api/types";
-import { LaneBadge, laneRatio } from "../chart/config";
+import type { Lane, Machine, RunEvent, Workspace } from "../api/types";
+import { LaneBadge, defaultChart, laneRatio } from "../chart/config";
 import { laneVar, num, param, params } from "../model/format";
 import { useBench, type Panel } from "../model/state";
 import { parseSweep } from "../model/sweep";
 
-const tabs: [Panel, string][] = [["live", "Quick results"], ["sweep", "Sweep"], ["build", "Build output"], ["log", "Run log"]];
+const Instrument = lazy(() => import("../chart/Instrument"));
+const tabs: [Panel, string][] = [["live", "Live"], ["sweep", "Sweep"], ["build", "Build output"], ["log", "Run log"]];
 const clock = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const noRows: never[] = [];
 
@@ -25,8 +28,8 @@ function eventText(event: RunEvent) {
   }
 }
 
-export default function RunPanel({ workspace, onJump, onResize, editable }: {
-  workspace: Workspace; onJump: (lane: Lane, line: number) => void;
+export default function RunPanel({ workspace, machine, onJump, onResize, editable }: {
+  workspace: Workspace; machine?: Machine; onJump: (lane: Lane, line: number) => void;
   onResize: (height: number) => void; editable: boolean;
 }) {
   const active = useBench((s) => s.active);
@@ -40,6 +43,8 @@ export default function RunPanel({ workspace, onJump, onResize, editable }: {
   const sweep = lastRun?.id === active?.id && lastRun ? lastRun.sweep : active && USE_MOCK_API ? sampleRun.sweep : undefined;
   const activeSweep = useMemo(() => sweep ?? parseSweep((active?.snapshot.lanes[0] ?? workspace.lanes[0])?.files["benchmark.perf"] ?? "").sweep, [sweep, active?.snapshot.lanes, workspace.lanes]);
   const ratios = laneRatio(rows, activeLanes, "cycles", "min");
+  const sizeName = activeSweep.find((entry) => entry.name === "N")?.name ?? activeSweep[0]?.name ?? "";
+  const settings = useMemo(() => ({ ...defaultChart, x: sizeName, size: sizeName, normalize: sizeName ? "element" as const : "raw" as const }), [sizeName]);
   const running = pending || Boolean(active && ["queued", "building", "running"].includes(active.status));
   const logs = active?.events ?? [];
   const onSweepEdit = (lane: Lane, sweepText: string) => {
@@ -61,6 +66,10 @@ export default function RunPanel({ workspace, onJump, onResize, editable }: {
     </div>
     {!layout.collapsed && <div className="run-panel-body" style={{ "--panel-height": `${layout.height}px` } as React.CSSProperties}>
       {layout.panel === "live" && <div className="live-grid">
+        <Suspense fallback={<div className="instrument loading-plot" role="status">Loading chart…</div>}>
+          <Instrument rows={rows} lanes={activeLanes} machine={lastRun?.machine ?? machine} sweep={activeSweep} settings={settings} beam={running}
+            tableHref={active && !running ? `/results/${active.id}#results-table` : "#quick-results"} />
+        </Suspense>
         <aside className="live-readouts">
           <div className="section-line"><h3>Run progress</h3><span className="chip" role="status">{active?.disconnected ? "Reconnecting…" : pending ? "Preparing…" : active?.status ?? "Ready"}</span></div>
           {running && active && <p className="help-text">Running a snapshot of this bench. You can keep editing.</p>}
@@ -81,6 +90,7 @@ export default function RunPanel({ workspace, onJump, onResize, editable }: {
                   <td>{row.metrics.timeNs ? num.format(row.metrics.timeNs.min) : "—"}</td>{activeLanes.length > 1 && <td>{ratio === undefined ? "—" : `${num.format(ratio)}×`}</td>}</tr>;
               })}</tbody></table>
           </div> : <p className="help-text">Results appear as each permutation finishes.</p>}
+          {active && !running && <Link className="control" to={`/results/${active.id}`}>Open full results <ArrowUpRightIcon size={14} aria-hidden="true" /></Link>}
         </aside>
       </div>}
       {layout.panel === "sweep" && <div className="sweep-content">

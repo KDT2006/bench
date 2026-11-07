@@ -19,6 +19,7 @@ import { flushEditors } from "../bench/editorSync";
 import { motion, useReducedMotion } from "motion/react";
 
 const Workbench = lazy(() => import("../bench/Workbench"));
+const Results = lazy(() => import("../pages/Results"));
 const mobileQuery = matchMedia("(width < 768px)");
 
 function Brand() {
@@ -133,6 +134,7 @@ export function App() {
   const workbench = pathname === "/bench";
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const benchTitle = useBench((s) => s.workspace.title);
+  const lastRunId = useBench((s) => s.lastRun?.id);
   const pending = useBench((s) => s.pending);
   const running = useBench((s) => Boolean(s.active && ["queued", "building", "running"].includes(s.active.status)));
   const cancelPending = useBench((s) => s.cancelPending);
@@ -195,6 +197,7 @@ export function App() {
   ];
   if (workbench && !mobile) {
     if (!pending && (!isOffline || running)) actions.push({ label: running ? "Cancel run" : "Run bench", shortcut: mac ? "⌘↵" : "Ctrl+Enter", run: () => { close(); runOrStop(); } });
+    if (lastRunId) actions.push({ label: "Open last results", run: () => { close(); navigate(`/results/${lastRunId}`); } });
   }
   const dialogTitles = { settings: "Settings", machine: "Machine", commands: "Command palette", shortcuts: "Keyboard shortcuts", menu: "Navigation" };
 
@@ -246,7 +249,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<RouteStub title="Benchscope">A workbench for microbenchmarks.</RouteStub>} />
             <Route path="/bench" element={<Workbench machines={machines.data} />} />
-            <Route path="/results/:runId" element={<RouteStub title="Results">Full results will be available here. See quick results in the Workbench.</RouteStub>} />
+            <Route path="/results/:runId" element={<Results />} />
             <Route path="/examples" element={<RouteStub title="Examples">Example benchmarks will be available here.</RouteStub>} />
             <Route path="/guide" element={<RouteStub title="Guide">The benchmark language reference will be available here.</RouteStub>} />
             <Route path="/benches" element={<RouteStub title="Library">Saved benches and run history will be available here.</RouteStub>} />

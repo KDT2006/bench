@@ -103,11 +103,12 @@ async function settle(id: string, query: QueryClient, error?: string) {
         : run.status === "failed" ? error ?? "The run failed. Open Build output to inspect the logs."
           : `Run finished. ${count} results.`,
       error: run.status === "failed",
+      href: `/results/${id}`,
     });
   } catch (cause) {
     const active = state().active;
     if (active?.id === id) useBench.setState({ active: { ...active, status: "failed" } });
-    state().notify({ text: message(cause), error: true });
+    state().notify({ text: message(cause), error: true, href: `/results/${id}` });
   } finally {
     if (settling === id) settling = undefined;
     void query.invalidateQueries({ queryKey: ["machines"] });

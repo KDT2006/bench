@@ -372,7 +372,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork }: {
       </div>)}
     </div>
     {!shared && <div onPointerUp={() => { if (heightPreview !== null) { setLayout({ height: heightPreview }); setHeightPreview(null); } }} style={{ "--resized-panel": heightPreview === null ? undefined : `${heightPreview}px` } as CSSProperties}>
-      <RunPanel workspace={workspace} onJump={jumpTo} editable={editable} onResize={(height) => {
+      <RunPanel workspace={workspace} machine={machine} onJump={jumpTo} editable={editable} onResize={(height) => {
         const next = Math.max(240, Math.min(720, height));
         if (document.activeElement?.classList.contains("panel-resizer") && !root.current?.querySelector(".panel-resizer:active")) setLayout({ height: next });
         else setHeightPreview(next);
