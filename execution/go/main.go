@@ -43,3 +43,12 @@ func ReadOSTimer() uint64 {
 }
 
 func ReadCPUTimer() uint64
+
+// ReadCPUTimerFrequency returns the timer's frequency in ticks per second when
+// the architecture exposes it directly. A zero result means it must be
+// calibrated against the OS timer.
+func ReadCPUTimerFrequency() uint64
+
+// fenced impls
+func ReadCPUTimerStartFenced() uint64
+func ReadCPUTimerEndFenced() uint64
