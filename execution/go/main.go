@@ -52,3 +52,29 @@ func ReadCPUTimerFrequency() uint64
 // fenced impls
 func ReadCPUTimerStartFenced() uint64
 func ReadCPUTimerEndFenced() uint64
+
+func GetCPUFreqWait(waitTimeMs uint64) uint64 {
+	if timerFreq := ReadCPUTimerFrequency(); timerFreq != 0 {
+		return timerFreq
+	}
+
+	CPUStart := ReadCPUTimerStartFenced()
+	OSStart := ReadOSTimer()
+	var OSEnd uint64
+	var OSElapsed uint64
+	OSWaitTime := OSTimerFreq * float64(waitTimeMs) / 1000
+
+	for OSElapsed < uint64(OSWaitTime) {
+		OSEnd = ReadOSTimer()
+		OSElapsed = OSEnd - OSStart
+	}
+
+	CPUEnd := ReadCPUTimerEndFenced()
+	CPUElapsed := CPUEnd - CPUStart
+	var CPUFreq uint64
+	if OSElapsed > 0 {
+		CPUFreq = OSTimerFreq * CPUElapsed / OSElapsed
+	}
+
+	return CPUFreq
+}
