@@ -170,7 +170,7 @@ interface Example { id: string; category: string; description: string; workspace
 
 - `title`, `createdAt`, `updatedAt` are strings. `linkDsl` is a boolean.
 - `lanes` has 1–4 entries. Each lane has a non-empty, unique `id`, a `language` in `Lang`, an `arch` in `Arch`, a `mode` in `Mode`, and `files`, `build`, `runner` as objects.
-- `POST /runs` only: each `benchmark.perf` that is present must be a string, and `parseSweep` must return no errors (`422` with the first error). This includes the limit of **200 permutations**.
+- `POST /runs` only: each `benchmark.perf` that is present must be a string, and `parseSweep` must return no errors (`422` with the first error). This includes the limit of **256 combinations** across the sweep parameters.
 - `POST /runs` only: each lane must contain its harness file (`harness.go` for Go, `harness.py` for Python). The website translates `benchmark.perf` into the harness in the browser before it calls `/runs`. The server does not generate code.
 
 Sweep value syntax (`#sweep` section): `name = [v1, v2, …]`. Numbers may have the suffixes `K`/`Ki` (×1024), `M`/`Mi` (×1024²) or `G`/`Gi` (×1024³), with an optional trailing `B`. Strings are double-quoted. Values reach the agent already parsed as numbers or strings.

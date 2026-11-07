@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 FIXTURE = HERE.parents[1] / "frontend/mock/fixtures/run.json"
 HARNESS = {"go": "harness.go", "python": "harness.py"}
 MAX_BYTES = 64 * 1024 * 1024
+MAX_COMBINATIONS = 256
 TIMER = {"source": "perf_counter_ns", "freqHz": 10**9, "calibrated": False}
 
 
@@ -129,11 +130,11 @@ def validate(job, trusted, arch):
             raise ValueError("This runner only measures the built-in Array sum. Choose Load live Array sum.")
         options(lane)
     permutations = job["permutations"]
-    if not 1 <= len(permutations) <= 32 or any(
+    if not 1 <= len(permutations) <= MAX_COMBINATIONS or any(
         set(perm["params"]) != {"N"} or type(perm["params"]["N"]) is not int
         or not 1 <= perm["params"]["N"] <= MAX_BYTES for perm in permutations
     ):
-        raise ValueError("Array sum accepts up to 32 positive N sizes, each at most 64 MiB.")
+        raise ValueError(f"Array sum accepts up to {MAX_COMBINATIONS} positive N sizes, each at most 64 MiB.")
 
 
 def body(dsl):

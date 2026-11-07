@@ -9,15 +9,26 @@ import { getRun } from "../api/client";
 import { USE_MOCK_API } from "../api/config";
 import type { FileName, ResultRow, Run, Stat } from "../api/types";
 import { chartTypes, defaultChart, LaneBadge, laneRatio, type ChartSettings, type ChartType, type Normalize, type YScale } from "../chart/config";
-import { bytes, date, duration, formatRatio, harness, laneVar, languages, metricNames, num, param, type Metric } from "../model/format";
+import { bytes, date, duration, formatRatio, harness, laneVar, languages, metricNames, num, param, params, paramsKey, type Metric } from "../model/format";
 import { MachineDetails } from "../shell/MachineDetails";
 import { download } from "../model/download";
+import { sampleRun } from "../model/examples";
 import { ShareDialog } from "./ShareDialog";
 import { EditorSkeleton } from "../bench/Workbench";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const Editor = lazy(() => import("../bench/Editor"));
-const chartLabels: Record<ChartType, string> = { line: "Line", ratio: "Ratio", bars: "Bars", distribution: "Distribution", heatmap: "Heatmap", scatter: "Scatter" };
+const chartLabels: Record<ChartType, string> = {
+  line: "Over the sweep", ratio: "Relative to A", bars: "By input", distribution: "Spread", heatmap: "Heatmap", scatter: "Two metrics",
+};
+const chartCaptions: Record<ChartType, string> = {
+  line: "Each point is a measured input. Follow a lane’s color to see how it changes across the sweep.",
+  ratio: "Lane A is the 1× baseline. A value of 2× means twice the selected metric at the same input.",
+  bars: "Compare the selected metric by input, with one color per lane.",
+  distribution: "The boxes show the middle half of measured timer ticks. Whiskers show the full range.",
+  heatmap: "Each cell shows the selected metric for a pair of sweep values.",
+  scatter: "Each point shows two metrics measured for the same input.",
+};
 const stats: [keyof Stat, string][] = [["min", "Min"], ["median", "Median"], ["mean", "Mean"], ["p95", "P95"]];
 const metrics = Object.keys(metricNames) as Metric[];
 
@@ -49,6 +60,54 @@ function finding(run: Run) {
       ? `${label(faster)} used fewer cycles than ${label(slower)} ${range}. Median ratio of minimum cycles.`
       : `${label(faster)} ran faster than ${label(slower)} ${range}. Median ratio of minimum times.`,
   };
+}
+
+function readableTime(ns: number) {
+  const [scale, unit] = ([[1e9, "s"], [1e6, "ms"], [1e3, "µs"], [1, "ns"]] as const).find(([scale]) => ns >= scale) ?? [1, "ns"];
+  return `${num.format(ns / scale)} ${unit}`;
+}
+
+function InputComparison({ rows, lanes, metric, stat }: { rows: ResultRow[]; lanes: Run["workspaceSnapshot"]["lanes"]; metric: Metric; stat: ChartSettings["stat"] }) {
+  const [selection, setSelection] = useState("");
+  const inputs = useMemo(() => {
+    const groups = new Map<string, ResultRow[]>();
+    for (const row of rows) {
+      if (row.metrics[metric]?.[stat] === undefined) continue;
+      const key = paramsKey(row.params);
+      const group = groups.get(key);
+      if (group) group.push(row);
+      else groups.set(key, [row]);
+    }
+    return [...groups].filter(([, rows]) => new Set(rows.map((row) => row.laneId)).size > 1);
+  }, [rows, metric, stat]);
+  const input = inputs.find(([key]) => key === selection) ?? inputs.at(-1);
+  if (!input) return null;
+  const [key, matchedRows] = input;
+  const values = new Map(matchedRows.map((row) => [row.laneId, row.metrics[metric]![stat]]));
+  const max = Math.max(...values.values());
+  const label = stats.find(([value]) => value === stat)?.[1];
+  const metricLabel = metric === "timeNs" ? "time per repetition" : metricNames[metric].toLowerCase();
+  return <section className="input-comparison" aria-labelledby="input-comparison-title">
+    <div className="section-line">
+      <div><h2 id="input-comparison-title">Compare at one input</h2><p>{label} {metricLabel} · {metric === "throughput" ? "Higher is better" : "Lower is better"}</p></div>
+      <div className="inline-controls"><label htmlFor="comparison-input">Input</label>
+        <select id="comparison-input" value={key} onChange={(event) => setSelection(event.target.value)}>
+          {inputs.map(([id, group]) => <option key={id} value={id}>{params(group[0].params)}</option>)}
+        </select>
+      </div>
+    </div>
+    <ul>{lanes.map((lane) => {
+      const value = values.get(lane.id);
+      if (value === undefined) return null;
+      return <li key={lane.id} style={{ "--channel": laneVar(lane.label) } as React.CSSProperties}>
+        <span><LaneBadge lane={lane} /> {lane.name || languages[lane.language]}</span>
+        <div className="comparison-track" aria-hidden="true"><div style={{ width: `${max > 0 ? value / max * 100 : 0}%` }} /></div>
+        <span className="mono" title={metric === "timeNs" ? `${show(value)} ns` : undefined}>
+          {metric === "timeNs" ? readableTime(value) : show(value, metric === "throughput" ? " GiB/s" : "")}
+        </span>
+      </li>;
+    })}</ul>
+  </section>;
 }
 
 function exportCsv(run: Run) {
@@ -149,10 +208,11 @@ function RunConfiguration({ run }: { run: Run }) {
 function RunView({ run }: { run: Run }) {
   const [url, setUrl] = useSearchParams();
   const [share, setShare] = useState(false);
-  const [controlsInitiallyOpen] = useState(() => !matchMedia("(width < 768px)").matches);
   const exportRef = useRef<(() => string) | null>(null);
   const chartType = chartTypes.find((entry) => entry === url.get("chart")) ?? "line";
-  const metric = metrics.find((entry) => entry === url.get("metric")) ?? (run.rows.some((row) => row.metrics.cycles) ? "cycles" : "timeNs");
+  const presentMetrics = metrics.filter((entry) => run.rows.some((row) => row.metrics[entry]));
+  const metric = metrics.find((entry) => entry === url.get("metric")) ?? presentMetrics[0] ?? "cycles";
+  const compareMetric = metrics.find((entry) => entry === url.get("against")) ?? presentMetrics.find((entry) => entry !== metric) ?? "timeNs";
   const stat = stats.find(([value]) => value === url.get("stat"))?.[0] ?? "min";
   const x = run.sweep.find((entry) => entry.name === url.get("x")) ?? run.sweep[0];
   const sizes = run.sweep.filter((entry) => entry.values.every((value) => typeof value === "number"));
@@ -165,10 +225,18 @@ function RunView({ run }: { run: Run }) {
   const yScale: YScale = requestedYScale === "log" || requestedYScale === "linear" ? requestedYScale : "auto";
   const settings = useMemo<ChartSettings>(() => ({
     ...defaultChart, type: chartType, metric, stat, x: x?.name ?? "", size, normalize, group, heatLane,
-    compareMetric: metrics.find((entry) => entry === url.get("against")) ?? "timeNs",
+    compareMetric,
     logX: url.get("xScale") !== "linear", yScale, caches: url.get("caches") !== "off",
-  }), [chartType, metric, stat, x, size, normalize, group, heatLane, yScale, url]);
+  }), [chartType, metric, stat, x, size, normalize, group, heatLane, yScale, compareMetric, url]);
   const insight = finding(run);
+  const isReplay = USE_MOCK_API || run.id === sampleRun.id;
+  const hasSamples = run.rows.some((row) => row.samples?.length);
+  const unavailable: Partial<Record<ChartType, string>> = {
+    ratio: run.workspaceSnapshot.lanes.length < 2 && !url.get("compare") ? "Add a second lane for ratios." : undefined,
+    distribution: !hasSamples ? "This run has no raw samples." : undefined,
+    heatmap: run.sweep.length < 2 ? "Heatmaps need two sweep variables." : undefined,
+    scatter: presentMetrics.length < 2 ? "This chart needs two measured metrics." : undefined,
+  };
   const compareId = url.get("compare");
   const compare = useQuery({ queryKey: ["run", compareId], queryFn: ({ signal }) => getRun(compareId!, signal), enabled: Boolean(compareId && compareId !== run.id) });
   const compatible = compare.data && JSON.stringify(compare.data.sweep) === JSON.stringify(run.sweep);
@@ -202,7 +270,7 @@ function RunView({ run }: { run: Run }) {
   return <div className="page results-page">
     <div className="results-heading">
       <div><h1>{run.workspaceSnapshot.title}</h1><p>{date.format(new Date(run.startedAt))} · {run.machine.cpuModel} · {num.format(run.rows.length)} results · {duration(run.startedAt, run.finishedAt)}</p>
-        <div className="result-status"><span className="chip">{run.status === "done" ? "Finished" : run.status}</span>{USE_MOCK_API && <span className="help-text">Synthetic replay data</span>}</div></div>
+        <div className="result-status"><span className="chip">{run.status === "done" ? "Finished" : run.status}</span><span className="chip">{isReplay ? "Sample replay" : run.rows.length ? "Measured on hardware" : "Live run"}</span></div></div>
       <div className="inline-controls">
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true }} className="control">Open in workbench</Link>
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true, rerun: true }} className="control primary">Run again</Link>
@@ -217,17 +285,17 @@ function RunView({ run }: { run: Run }) {
     <div className="finding">{insight.value && <strong>{insight.value}</strong>}<p>{insight.text}</p></div>
     {compareId && <div className="bench-banner"><span>{compare.isPending ? "Loading comparison…" : compare.isError ? "The comparison run could not be loaded." : compatible ? "Comparing the first lane of each run." : "These runs use different sweep parameters."}</span>
       <button className="control" type="button" onClick={() => update("compare", "")}>Clear comparison</button></div>}
+    <InputComparison rows={comparison?.rows ?? run.rows} lanes={comparison?.lanes ?? run.workspaceSnapshot.lanes} metric={metric} stat={stat} />
     <div className="result-chart-grid">
       <div>
+        <div className="segmented chart-tabs" aria-label="Chart type">{chartTypes.map((value) => <button className="control" key={value} type="button" aria-pressed={value === chartType}
+          title={unavailable[value]} disabled={Boolean(unavailable[value])} onClick={() => update("chart", value)}>{chartLabels[value]}</button>)}</div>
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading chart…</div>}>
           <Instrument title="Sweep results" rows={comparison?.rows ?? run.rows} lanes={comparison?.lanes ?? run.workspaceSnapshot.lanes} machine={run.machine} sweep={run.sweep}
-            settings={settings} caption={insight.text} tableHref="#results-table" onExport={(exportChart) => { exportRef.current = exportChart; }} />
+            settings={settings} caption={unavailable[chartType] ?? chartCaptions[chartType]} tableHref="#results-table" onExport={(exportChart) => { exportRef.current = exportChart; }} />
         </Suspense>
-        <div className="segmented chart-tabs" aria-label="Chart type">{chartTypes.map((value) => <button className="control" key={value} type="button" aria-pressed={value === chartType}
-          title={value === "distribution" && !run.rows.some((row) => row.samples?.length) ? "This run has no raw samples" : value === "heatmap" && run.sweep.length < 2 ? "Heatmaps need two sweep parameters" : undefined}
-          onClick={() => update("chart", value)}>{chartLabels[value]}</button>)}</div>
       </div>
-      <details className="result-rail" open={controlsInitiallyOpen}><summary>Chart controls</summary>{rail}</details>
+      <details className="result-rail"><summary>Chart controls</summary>{rail}</details>
     </div>
     <ResultTable run={run} settings={settings} />
     <RunConfiguration run={run} />

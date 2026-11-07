@@ -4,6 +4,7 @@ import { cancelRun, generateScaffold, getRun, send, startRun, subscribeToRun } f
 import type { Lane, Run, RunEvent, Workspace } from "../api/types";
 import { usePreferences } from "../shell/preferences";
 import { diagnostics } from "./dsl";
+import { parseSweep } from "./sweep";
 import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "./scaffoldLimits";
 import { harness, languages, num } from "./format";
 import { saveDraft, useBench, writeLocal } from "./state";
@@ -121,7 +122,11 @@ async function settle(id: string, query: QueryClient, error?: string) {
 export async function runBench(query: QueryClient) {
   const { workspace, pending, active, generating } = state();
   if (pending || (active && !isFinished(active.status))) return;
-  const invalid = workspace.lanes.flatMap((lane) => lane.mode === "scaffold" ? diagnostics(sourceOf(lane)).map(({ message }) => `Lane ${lane.label}: ${message}`) : []);
+  const invalid = workspace.lanes.flatMap((lane) => {
+    const dsl = sourceOf(lane);
+    const issues = lane.mode === "scaffold" ? diagnostics(dsl).map(({ message }) => message) : parseSweep(dsl).errors;
+    return issues.map((issue) => `Lane ${lane.label}: ${issue}`);
+  });
   if (invalid.length) return state().notify({ text: invalid[0], error: true });
   const tooLong = workspace.lanes.find((lane) => isStale(lane) && scaffoldLength(sourceOf(lane)) > MAX_SCAFFOLD_CHARACTERS);
   if (tooLong) return state().notify({ text: `Lane ${tooLong.label}. ${scaffoldLimitMessage}`, error: true });

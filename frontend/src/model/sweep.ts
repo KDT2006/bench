@@ -1,7 +1,11 @@
 import type { ParseResponse, SweepParam } from "../api/types";
 
 const units: Record<string, number> = { "": 1, K: 1024, KI: 1024, M: 1024 ** 2, MI: 1024 ** 2, G: 1024 ** 3, GI: 1024 ** 3 };
-export const MAX_PERMUTATIONS = 200;
+export const MAX_PERMUTATIONS = 256;
+
+export function sweepCombinations(sweep: SweepParam[]) {
+  return sweep.reduce((count, param) => count * param.values.length, 1);
+}
 
 export function parseSweep(dsl: string): ParseResponse {
   const sweep: SweepParam[] = [];
@@ -38,7 +42,7 @@ export function parseSweep(dsl: string): ParseResponse {
       }
     }
   }
-  const permutations = sweep.reduce((count, param) => count * param.values.length, 1);
-  if (permutations > MAX_PERMUTATIONS) errors.push(`Reduce the sweep to ${MAX_PERMUTATIONS} permutations or fewer.`);
+  const permutations = sweepCombinations(sweep);
+  if (permutations > MAX_PERMUTATIONS) errors.push(`The sweep has ${permutations.toLocaleString()} combinations. The limit is ${MAX_PERMUTATIONS}.`);
   return { sweep, permutations: errors.length ? 0 : permutations, errors };
 }
