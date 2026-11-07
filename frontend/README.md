@@ -21,9 +21,15 @@ Open the URL printed by Vite. The Workbench supports editing and running at view
 3. Open full results to change the chart, sort or filter the table, inspect the run snapshot, or export CSV, JSON, and chart PNG.
 4. **Save** adds the bench to **Library**. **Share** creates a read-only link. A recipient needs access to the same server to open the link.
 
+## Generate Go or Python from pseudocode
+
+Get a Gemini API key in [Google AI Studio](https://aistudio.google.com/app/apikey), using your hackathon project if MLH provided one. Add it as `GEMINI_API_KEY` in the ignored `frontend/.env.local` file. Optionally set `GEMINI_MODEL` to a supported model available to that project. Keep the key server-side and out of Git. Keep `VITE_API_BASE_URL` unset to use the local demo API.
+
+Restart the dev server, open Workbench, select a lane language, then choose **Generate code** from the lane menu. The server sends benchmark pseudocode of up to 250 characters to Gemini and displays the returned source in the harness tab. **Run** can also generate a stale scaffold. It still replays the fixture, so it does not execute generated source or measure its performance. Without a key, generation uses the sample scaffold.
+
 ## API and data
 
-The default Vite server provides a mock HTTP API and server-sent events. The sample fixture contains synthetic Go and Python measurements from 1 KiB to 64 MiB. Custom code and flags still replay the fixture. The mock returns a sample scaffold for the requested language.
+The default Vite server provides a mock HTTP API and server-sent events. The sample fixture contains synthetic Go and Python measurements from 1 KiB to 64 MiB. Custom code and flags still replay the fixture.
 
 Set `VITE_API_BASE_URL` in `.env.local` to the real backend API prefix, such as `http://127.0.0.1:8080/api`, then restart Vite. The app uses this value for HTTP requests and run streaming. For a separate origin, configure the backend to allow requests from the frontend origin.
 

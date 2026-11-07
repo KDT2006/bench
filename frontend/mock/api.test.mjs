@@ -139,3 +139,64 @@ test("wide positive lane gaps use a log axis unless explicitly overridden", asyn
   assert.equal(shouldUseLogYAxis(withZero, lanes, defaultChart), false);
   assert.equal(formatRatio(60.391), "60×");
 });
+
+test("starter and gallery examples fit the generation limit", async () => {
+  const { starterWorkspace } = await server.ssrLoadModule("/src/model/examples.ts");
+  const { scaffoldLength, MAX_SCAFFOLD_CHARACTERS } = await server.ssrLoadModule("/src/model/scaffoldLimits.ts");
+  const examples = await (await request("/examples")).json();
+  for (const workspace of [starterWorkspace(), ...examples.map((example) => example.workspace)]) {
+    for (const lane of workspace.lanes) {
+      assert.ok(scaffoldLength(lane.files["benchmark.perf"]) <= MAX_SCAFFOLD_CHARACTERS, workspace.title);
+    }
+  }
+});
+
+test("Gemini receives benchmark parameters and the API enforces 250 characters before sending", async () => {
+  const { createGeminiScaffold } = await server.ssrLoadModule("/server/gemini.ts");
+  const { makeMockApi } = await server.ssrLoadModule("/mock/core.ts");
+  let calls = 0;
+  const generated = {
+    go: "package bench\nfunc Benchmark(n int) int { return n }",
+    python: "def benchmark(n):\n    return n",
+  };
+  const fakeGemini = async (url, request) => {
+    calls++;
+    assert.equal(url, "https://generativelanguage.googleapis.com/v1beta/models/demo-model:generateContent");
+    assert.equal(new Headers(request.headers).get("x-goog-api-key"), "test-key");
+    const payload = JSON.parse(request.body);
+    assert.match(payload.systemInstruction.parts[0].text, /Translate/);
+    assert.equal(payload.generationConfig.responseMimeType, "application/json");
+    const input = JSON.parse(payload.contents[0].parts[0].text);
+    assert.equal(input.pseudocode.trim(), "#bench\nsink(N)");
+    assert.deepEqual(input.params, [{ name: "N", types: ["number"] }]);
+    return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [
+      { text: JSON.stringify({ code: generated[input.language], warnings: [] }) },
+    ] } }] });
+  };
+  const api = makeMockApi({}, undefined, createGeminiScaffold("test-key", "demo-model", fakeGemini));
+  const dsl = "#sweep\nN = [1, 2]\n\n#bench\nsink(N)".padEnd(250);
+  const scaffold = (dsl, language) => api(new Request("http://localhost/api/scaffold", {
+    method: "POST", body: JSON.stringify({ dsl, language, arch: "x86_64" }),
+  }));
+
+  assert.equal((await scaffold(dsl + " ", "go")).status, 413);
+  assert.equal(calls, 0);
+  for (const language of ["go", "python"]) {
+    const response = await scaffold(dsl, language);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { code: generated[language], warnings: [], cached: false, model: "demo-model" });
+  }
+  assert.equal(calls, 2);
+});
+
+test("Gemini quota and invalid output return actionable errors", async () => {
+  const { createGeminiScaffold } = await server.ssrLoadModule("/server/gemini.ts");
+  const input = { dsl: "#bench\nsink(1)", language: "go", arch: "x86_64" };
+  const quota = createGeminiScaffold("test-key", "demo-model", async () => new Response(null, { status: 429 }));
+  await assert.rejects(quota(input), { status: 429, message: /quota/ });
+
+  const invalid = createGeminiScaffold("test-key", "demo-model", async () => Response.json({
+    candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"code":"","warnings":[]}' }] } }],
+  }));
+  await assert.rejects(invalid(input), { status: 502, message: /unexpected response/ });
+});

@@ -4,6 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeMockApi, type MockStorage } from "./core";
+import type { ScaffoldGenerator } from "../server/gemini";
 
 type Kind = Parameters<MockStorage["write"]>[0];
 type Records = Record<string, { value: unknown; activeUntil?: number }>;
@@ -38,8 +39,8 @@ function localStorage(directory?: string): MockStorage {
   };
 }
 
-export function mockApi(directory?: string): Plugin {
-  const route = makeMockApi(localStorage(directory));
+export function mockApi(directory?: string, generateScaffold?: ScaffoldGenerator): Plugin {
+  const route = makeMockApi(localStorage(directory), undefined, generateScaffold);
   const install = (server: Pick<ViteDevServer, "middlewares">) => {
     server.middlewares.use((req, res, next) => {
       const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);

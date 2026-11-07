@@ -71,6 +71,7 @@
   .file-dirty { color: var(--text-2); }
   .editor-note, .code-warning { padding: 7px 12px; border-bottom: 1px solid var(--hairline); color: var(--text-2); font-size: var(--size-small); }
   .editor-note { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .editor-note.error-text { color: var(--error-text); }
   .code-warning summary { cursor: pointer; border-radius: var(--radius-control); }
   .code-warning ul { padding: 4px 0 0 16px; list-style: disc; }
   .editor-slot { flex: 1 1 auto; min-height: 278px; display: flex; flex-direction: column; }
