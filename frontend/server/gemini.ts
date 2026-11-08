@@ -1,6 +1,6 @@
 import type { Arch, Lang, ScaffoldResponse } from "../src/api/types";
-import { parseSweep, serializeSweep } from "../src/model/sweep";
-import { assembleSections, directives, parseSections, type Sections } from "../src/model/sections";
+import { parseSweep, serializeSweep } from "../src/model/sweep.js";
+import { assembleSections, directives, parseSections, type Sections } from "../src/model/sections.js";
 
 type ScaffoldInput = { dsl: string; language: Lang; arch: Arch; signal?: AbortSignal };
 export type ScaffoldGenerator = (input: ScaffoldInput) => Promise<ScaffoldResponse>;
