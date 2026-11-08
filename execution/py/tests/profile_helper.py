@@ -30,7 +30,7 @@ def run_profile(
             profile = NewRepProfile(
                 f"{test.id()}/{mode}",
                 byte_count,
-                measured_work,
+                lambda measure: measure(measured_work),
                 timedelta(milliseconds=100),
                 cpu_freq,
             )

@@ -54,14 +54,21 @@ def PrintResult(
         f"  Slowest iteration: major={result.MajorPageFaultCountMax}  "
         f"minor={result.MinorPageFaultCountMax}\n"
     )
-    out.write(
-        f"L1 data misses: fastest={result.L1DataMissMin}  "
-        f"slowest={result.L1DataMissMax}\n"
-    )
-    out.write(
-        f"Branch misses: fastest={result.BranchMisssMin}  "
-        f"slowest={result.BranchMissMax}\n"
-    )
+    if not result.HardwareCountersError:
+        out.write(
+            f"L1 data misses: fastest={result.L1DataMissMin}  "
+            f"slowest={result.L1DataMissMax}\n"
+        )
+        out.write(
+            f"Branch misses: fastest={result.BranchMisssMin}  "
+            f"slowest={result.BranchMissMax}\n"
+        )
+    else:
+        reason = result.HardwareCountersError
+        out.write(
+            f"L1 data misses: unavailable ({reason})\n"
+            f"Branch misses: unavailable ({reason})\n"
+        )
 
 
 __all__ = ["PrintResult"]

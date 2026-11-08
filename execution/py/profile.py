@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
+from contextlib import ExitStack
 from typing import Callable, Union
 
 from . import timer
@@ -24,7 +25,7 @@ Duration = Union[timedelta, float, int]  # timedelta, or seconds
 class RepetitionProfile:
     Name: str
     ByteCount: int
-    Func: Callable[[], object]
+    Iteration: Callable[["Measurement"], object]
     TryForTime: Duration
     CPUFreq: int
 
@@ -57,6 +58,9 @@ class RepetitionProfileResults:
 
     BranchMisssMin: int = 0  # (sic) name kept for API compatibility
     BranchMissMax: int = 0
+
+    # Why hardware counters could not be opened; empty when they were collected.
+    HardwareCountersError: str = ""
 
     def Iterations(self) -> int:
         """Return the number of completed workload calls."""
@@ -105,14 +109,20 @@ def GetPageFaultCount() -> tuple[int, int]:
 def NewRepProfile(
     name: str,
     byteCount: int,
-    f: Callable[[], object],
+    iteration: Callable[["Measurement"], object],
     tryForTime: Duration,
     cpuFreq: int,
 ) -> RepetitionProfile:
+    """Build a profile whose iteration calls measure(work) or uses with measure.
+
+    Setup and cleanup belong outside the measurement. Hardware counters are
+    always attempted; if they cannot be opened, the run continues without them
+    and the reason is recorded in HardwareCountersError.
+    """
     return RepetitionProfile(
         Name=name,
         ByteCount=byteCount,
-        Func=f,
+        Iteration=iteration,
         TryForTime=tryForTime,
         CPUFreq=cpuFreq,
     )
@@ -155,101 +165,100 @@ class _PinnedThread:
                 pass
 
 
-class _GCDisabled:
-    """Keep cyclic-GC pauses out of measured regions."""
+class Measurement:
+    """The timed region, usable as measure(callback) or as a context manager."""
 
-    def __enter__(self) -> None:
-        self._was_enabled = gc.isenabled()
+    def __init__(self, result, fenced, counters):
+        self.result = result
+        self.counters = counters
+        self.read_start = timer.ReadCPUTimerStartFenced if fenced else timer.ReadCPUTimer
+        self.read_end = timer.ReadCPUTimerEndFenced if fenced else timer.ReadCPUTimer
+        self.active = False
+        self.calls = 0
+
+    def __call__(self, bench: Callable[[], object]) -> None:
+        with self:
+            bench()
+
+    def __enter__(self):
+        if self.active or self.calls:
+            raise ValueError("iteration must measure exactly once")
+        self.active = True
+        # Keep cyclic-GC pauses out of the timed region only; setup/cleanup run with GC on.
+        self.gc_was_enabled = gc.isenabled()
         gc.disable()
+        self.major_before, self.minor_before = GetPageFaultCount()
+        for counter in self.counters:
+            counter.Start()
+        self.start = self.read_start()
+        return self
 
-    def __exit__(self, *exc: object) -> None:
-        if self._was_enabled:
+    def __exit__(self, exc_type, exc, traceback):
+        end = self.read_end()
+        if self.gc_was_enabled:
             gc.enable()
+        self.active = False
+        for counter in self.counters:
+            counter.Stop()
+        if exc_type is not None:
+            return False
+        misses, branches = (c.Read() for c in self.counters) if self.counters else (0, 0)
+        major_after, minor_after = GetPageFaultCount()
+        elapsed = (end - self.start) & _U64
+        major = major_after - self.major_before
+        minor = minor_after - self.minor_before
+        result = self.result
+        if result._numIterations == 0 or elapsed < result.MinTime:
+            result.MinTime = elapsed
+            result.MajorPageFaultCountMin = major
+            result.MinorPageFaultCountMin = minor
+            result.L1DataMissMin = misses
+            result.BranchMisssMin = branches
+        if result._numIterations == 0 or elapsed > result.MaxTime:
+            result.MaxTime = elapsed
+            result.MajorPageFaultCountMax = major
+            result.MinorPageFaultCountMax = minor
+            result.L1DataMissMax = misses
+            result.BranchMissMax = branches
+        result.TotalTime += elapsed
+        result._numIterations += 1
+        result._totalPageFaults += major + minor
+        self.calls += 1
+        return False
+
+
+def _open_counters(stack: ExitStack) -> tuple[list, str]:
+    """Open both counters, or none: on failure close any opened and return why."""
+    with ExitStack() as opened:
+        try:
+            counters = [opened.enter_context(NewCounter(event)) for event in
+                        (EventL1DataMisses, EventBranchMisses)]
+        except (OSError, NotImplementedError, ValueError) as exc:
+            return [], str(exc) or type(exc).__name__
+        stack.enter_context(opened.pop_all())
+    return counters, ""
 
 
 def _start(r: RepetitionProfile, fenced: bool) -> RepetitionProfileResults:
-    """Measure workload calls; counter and workload failures propagate to the caller."""
-    endTime = time.monotonic() + _to_seconds(r.TryForTime)
+    """Repeat setup/measure/cleanup; propagate workload failures."""
+    result = RepetitionProfileResults()
+    with _PinnedThread(), ExitStack() as stack:
+        counters, result.HardwareCountersError = _open_counters(stack)
+        # The run window starts after counter setup so it isn't spent opening them.
+        end_time = time.monotonic() + _to_seconds(r.TryForTime)
+        measure = Measurement(result, fenced, counters)
+        while time.monotonic() < end_time:
+            measure.calls = 0
+            r.Iteration(measure)
+            if measure.calls != 1:
+                raise ValueError("iteration must measure exactly once")
 
-    result = RepetitionProfileResults(MinTime=_U64)
-
-    # Look up attributes once so they aren't paid for on every iteration.
-    readStart = timer.ReadCPUTimerStartFenced if fenced else timer.ReadCPUTimer
-    readEnd = timer.ReadCPUTimerEndFenced if fenced else timer.ReadCPUTimer
-    func = r.Func
-    cpuFreq = r.CPUFreq
-    byteCount = r.ByteCount
-
-    with (
-        _PinnedThread(),
-        _GCDisabled(),
-        NewCounter(EventL1DataMisses) as c,
-        NewCounter(EventBranchMisses) as c2,
-    ):
-        while time.monotonic() < endTime:
-            # count faults
-            majorBefore, minorBefore = GetPageFaultCount()
-
-            c.Start()
-            c2.Start()
-
-            CPUStart = readStart()
-            func()
-            CPUEnd = readEnd()
-
-            c.Stop()
-            misses = c.Read()
-            c2.Stop()
-            branchMisses = c2.Read()
-
-            majorAfter, minorAfter = GetPageFaultCount()
-
-            CPUElapsed = (CPUEnd - CPUStart) & _U64
-
-            pageFaultsMajor = majorAfter - majorBefore
-            pageFaultsMinor = minorAfter - minorBefore
-
-            result.TotalTime += CPUElapsed
-
-            if result._numIterations == 0:
-                result.MinTime = CPUElapsed
-                result.MaxTime = CPUElapsed
-                result.GigabytesPerSecondMin = GBPerSec(CPUElapsed, cpuFreq, byteCount)
-                result.GigabytesPerSecondMax = result.GigabytesPerSecondMin
-                result.MajorPageFaultCountMin = pageFaultsMajor
-                result.MinorPageFaultCountMin = pageFaultsMinor
-                result.MajorPageFaultCountMax = pageFaultsMajor
-                result.MinorPageFaultCountMax = pageFaultsMinor
-                result.L1DataMissMin = result.L1DataMissMax = misses
-                result.BranchMisssMin = result.BranchMissMax = branchMisses
-            elif CPUElapsed < result.MinTime:
-                result.MinTime = CPUElapsed
-                result.GigabytesPerSecondMin = GBPerSec(result.MinTime, cpuFreq, byteCount)
-                result.MajorPageFaultCountMin = pageFaultsMajor
-                result.MinorPageFaultCountMin = pageFaultsMinor
-                result.L1DataMissMin = misses
-                result.BranchMisssMin = branchMisses
-            elif CPUElapsed > result.MaxTime:
-                result.MaxTime = CPUElapsed
-                result.MajorPageFaultCountMax = pageFaultsMajor
-                result.MinorPageFaultCountMax = pageFaultsMinor
-                result.L1DataMissMax = misses
-                result.BranchMissMax = branchMisses
-
-            result._numIterations += 1
-            result._totalPageFaults += pageFaultsMajor + pageFaultsMinor
-
-    if result._numIterations == 0:
-        result.MinTime = 0
-        return result
-
-    result.AvgTime = result.TotalTime / result._numIterations
-
-    result.GigabytesPerSecondMax = GBPerSec(result.MaxTime, cpuFreq, byteCount)
-    result.GigabytesPerSecondAvg = GBPerSec(result.AvgTime, cpuFreq, byteCount)
-
-    result.PageFaultCountAvg = result._totalPageFaults / result._numIterations
-
+    if result._numIterations:
+        result.AvgTime = result.TotalTime / result._numIterations
+        result.PageFaultCountAvg = result._totalPageFaults / result._numIterations
+        result.GigabytesPerSecondMin = GBPerSec(result.MinTime, r.CPUFreq, r.ByteCount)
+        result.GigabytesPerSecondMax = GBPerSec(result.MaxTime, r.CPUFreq, r.ByteCount)
+        result.GigabytesPerSecondAvg = GBPerSec(result.AvgTime, r.CPUFreq, r.ByteCount)
     return result
 
 

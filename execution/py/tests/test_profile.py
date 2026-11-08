@@ -31,12 +31,50 @@ class FakeCounter(HardwareCounter):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_setup_and_cleanup_are_outside_time_and_fault_measurements(self):
+        events = []
+
+        def iteration(measure):
+            events.append("setup")
+            with measure:
+                events.append("bench")
+            events.append("cleanup")
+
+        def read(label, value):
+            events.append(label)
+            return value
+
+        with (
+            patch.object(profile, "_PinnedThread"),
+            patch.object(profile, "NewCounter", side_effect=OSError("perf disabled")),
+            patch.object(profile.time, "monotonic", side_effect=[0, 0.5, 1]),
+            patch.object(profile, "GetPageFaultCount", side_effect=lambda: read("faults", (0, 0))),
+            patch.object(timer, "ReadCPUTimerStartFenced", side_effect=lambda: read("start", 10)),
+            patch.object(timer, "ReadCPUTimerEndFenced", side_effect=lambda: read("end", 30)),
+        ):
+            p = profile.NewRepProfile("example", 0, iteration, 1, 1000)
+            result = p.Start(True)
+        self.assertEqual(events, ["setup", "faults", "start", "bench", "end", "faults", "cleanup"])
+        self.assertEqual(result.TotalTime, 20)
+        self.assertEqual(result.Iterations(), 1)
+        output = io.StringIO()
+        PrintResult(output, p, result)
+        self.assertEqual(result.HardwareCountersError, "perf disabled")
+        self.assertIn("L1 data misses: unavailable (perf disabled)", output.getvalue())
+        self.assertIn("Branch misses: unavailable (perf disabled)", output.getvalue())
+
+    def test_iteration_must_measure_exactly_once(self):
+        for iteration in (lambda m: None, lambda m: (m(lambda: None), m(lambda: None))):
+            with self.subTest(iteration=iteration), patch.object(profile, "_PinnedThread"):
+                with self.assertRaisesRegex(ValueError, "exactly once"):
+                    profile.NewRepProfile("bad", 0, iteration, 1, 1000).Start(False)
+
     def measure(self, durations, fenced=True, workload=None, cpu_freq=1000):
         count = len(durations)
         l1 = FakeCounter(range(10, 10 + count))
         branch = FakeCounter(range(20, 20 + count))
         work = workload if workload is not None else Mock()
-        p = profile.NewRepProfile("example", 1024**3, work, timedelta(seconds=1), cpu_freq)
+        p = profile.NewRepProfile("example", 1024**3, lambda measure: measure(work), timedelta(seconds=1), cpu_freq)
         faults = [sample for i in range(count) for sample in ((0, 0), (i, i + 1))]
         with ExitStack() as stack:
             stack.enter_context(patch.object(profile, "_PinnedThread"))
@@ -97,16 +135,21 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "work failed"):
             self.measure([10], workload=Mock(side_effect=RuntimeError("work failed")))
 
-    def test_partial_counter_setup_failure_closes_first_counter(self):
-        counter = FakeCounter([])
-        was_enabled = gc.isenabled()
-        with patch.object(profile, "_PinnedThread"), patch.object(
-            profile, "NewCounter", side_effect=[counter, OSError("counter unavailable")]
-        ):
-            with self.assertRaisesRegex(OSError, "counter unavailable"):
-                profile.NewRepProfile("error", 0, lambda: None, 1, 1000).Start(True)
-        counter.Close.assert_called_once()
-        self.assertEqual(gc.isenabled(), was_enabled)
+    def test_partial_counter_setup_failure_closes_first_counter_and_runs_without_counters(self):
+        for error in (OSError("counter unavailable"), NotImplementedError("counter unavailable")):
+            with self.subTest(error=type(error).__name__):
+                counter = FakeCounter([])
+                work = Mock()
+                with patch.object(profile, "_PinnedThread"), patch.object(
+                    profile, "NewCounter", side_effect=[counter, error]
+                ), patch.object(profile.time, "monotonic", side_effect=[0, 0.5, 1]):
+                    result = profile.NewRepProfile("error", 0, lambda measure: measure(work), 1, 1000).Start(True)
+                counter.Close.assert_called_once()
+                counter.Start.assert_not_called()
+                self.assertEqual(work.call_count, 1)
+                self.assertEqual(result.Iterations(), 1)
+                self.assertEqual(result.HardwareCountersError, "counter unavailable")
+                self.assertEqual((result.L1DataMissMax, result.BranchMissMax), (0, 0))
 
     def test_printer_metrics_and_units(self):
         p, r = self.measure([50, 20, 90, 40])

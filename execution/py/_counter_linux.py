@@ -40,6 +40,11 @@ PERF_BIT_EXCLUDE_HV = 1 << 6
 
 PERF_FLAG_FD_CLOEXEC = 1 << 3
 
+PERF_FORMAT_TOTAL_TIME_ENABLED = 1 << 0
+PERF_FORMAT_TOTAL_TIME_RUNNING = 1 << 1
+# A read returns three u64s: value, time enabled, time running.
+readFormat = PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING
+
 PERF_EVENT_IOC_ENABLE = 0x2400
 PERF_EVENT_IOC_DISABLE = 0x2401
 PERF_EVENT_IOC_RESET = 0x2403
@@ -82,8 +87,15 @@ def newLinuxCounter(e: Event) -> HardwareCounter:
     if cfg is None:
         raise ValueError("unsupported event on linux")
     attr = _PerfEventAttr(
-        type=cfg[0], size=ctypes.sizeof(_PerfEventAttr), config=cfg[1], flags=bitFields)
-    return linuxCounter(_perf_event_open(attr, 0, -1, -1, PERF_FLAG_FD_CLOEXEC))
+        type=cfg[0], size=ctypes.sizeof(_PerfEventAttr), config=cfg[1],
+        read_format=readFormat, flags=bitFields)
+    counter = linuxCounter(_perf_event_open(attr, 0, -1, -1, PERF_FLAG_FD_CLOEXEC))
+    try:
+        counter.probe()
+    except BaseException:
+        counter.Close()
+        raise
+    return counter
 
 
 class linuxCounter(HardwareCounter):
@@ -99,8 +111,30 @@ class linuxCounter(HardwareCounter):
     def Stop(self) -> None:
         fcntl.ioctl(self.fd, PERF_EVENT_IOC_DISABLE, 0)
 
+    def _read(self) -> tuple[int, int, int]:
+        """Return (value, time enabled ns, time running ns)."""
+        data = os.read(self.fd, 24)
+        if len(data) != 24:
+            raise OSError(f"short perf counter read: {len(data)} bytes")
+        return (int.from_bytes(data[0:8], "little", signed=True),
+                int.from_bytes(data[8:16], "little"),
+                int.from_bytes(data[16:24], "little"))
+
     def Read(self) -> int:
-        return int.from_bytes(os.read(self.fd, 8), "little", signed=True)
+        return self._read()[0]
+
+    def probe(self) -> None:
+        """Fail if the counter never runs on this CPU.
+
+        On hybrid CPUs, generic hardware events are bound to one core type's
+        PMU; on the other core type they open fine but never count.
+        """
+        self.Start()
+        sum(range(1000))
+        self.Stop()
+        _, enabled, running = self._read()
+        if enabled and not running:
+            raise OSError("counter does not run on this CPU; its core type lacks this PMU")
 
     def Close(self) -> None:
         if self.fd >= 0:

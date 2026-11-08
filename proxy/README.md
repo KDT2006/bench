@@ -13,6 +13,15 @@ cd proxy
 go run . -addr 127.0.0.1:8080
 ```
 
+For Python, first run `python3 -m execution.py.main` from the repository root,
+then enable its local server when starting the proxy:
+
+```sh
+go run . -addr 127.0.0.1:8080 -python-url http://127.0.0.1:6970/execute
+```
+
+See [the Python executioner](../execution/py/README.md) for its benchmark format.
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `-addr` | `:8080` | Listen address |
