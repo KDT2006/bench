@@ -10,9 +10,11 @@ import (
 const OSTimerFreq = 1_000_000_000
 
 type RepetitionProfile struct {
-	Name       string
-	ByteCount  uint64
-	Func       func()
+	Name      string
+	ByteCount uint64
+	// Iteration wraps each measurement with setup and cleanup.
+	// It must call measure exactly once with the benchmark function.
+	Iteration  func(measure func(func()))
 	TryForTime time.Duration
 	CPUFreq    uint64
 }
@@ -94,11 +96,11 @@ func GetPageFaultCount() (int64, int64, error) {
 	return getPageFaults()
 }
 
-func NewRepProfile(name string, byteCount uint64, f func(), tryForTime time.Duration, cpuFreq uint64) *RepetitionProfile {
+func NewRepProfile(name string, byteCount uint64, iteration func(measure func(func())), tryForTime time.Duration, cpuFreq uint64) *RepetitionProfile {
 	return &RepetitionProfile{
 		Name:       name,
 		ByteCount:  byteCount,
-		Func:       f,
+		Iteration:  iteration,
 		TryForTime: tryForTime,
 		CPUFreq:    cpuFreq,
 	}
@@ -116,28 +118,28 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 	}
 
 	// init cache misses counter
-	c, err := NewCounter(EventL1DataMisses)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
+	// c, err := NewCounter(EventL1DataMisses)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// defer c.Close()
 
 	// init branch misses counter
-	c2, err := NewCounter(EventBranchMisses)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c2.Close()
+	// c2, err := NewCounter(EventBranchMisses)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// defer c2.Close()
 
-	for time.Now().Compare(endTime) == -1 {
+	measure := func(bench func()) {
 		// count faults
 		majorBefore, minorBefore, err := GetPageFaultCount()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		c.Start()
-		c2.Start()
+		// c.Start()
+		// c2.Start()
 
 		var CPUStart uint64
 		var CPUEnd uint64
@@ -148,7 +150,7 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 			CPUStart = ReadCPUTimer()
 		}
 
-		r.Func()
+		bench()
 
 		if fenced {
 			CPUEnd = ReadCPUTimerEndFenced()
@@ -156,17 +158,17 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 			CPUEnd = ReadCPUTimer()
 		}
 
-		c.Stop()
-		misses, err := c.Read()
-		if err != nil {
-			log.Fatal(err)
-		}
+		// c.Stop()
+		// misses, err := c.Read()
+		// if err != nil {
+		// 	log.Fatal(err)
+		// }
 
-		c2.Stop()
-		branchMisses, err := c2.Read()
-		if err != nil {
-			log.Fatal(err)
-		}
+		// c2.Stop()
+		// branchMisses, err := c2.Read()
+		// if err != nil {
+		// 	log.Fatal(err)
+		// }
 
 		majorAfter, minorAfter, err := GetPageFaultCount()
 		if err != nil {
@@ -195,18 +197,22 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 			result.GigabytesPerSecondMin = GBPerSec(float64(result.MinTime), float64(r.CPUFreq), float64(r.ByteCount))
 			result.MajorPageFaultCountMin = pageFaultsMajor
 			result.MinorPageFaultCountMin = pageFaultsMinor
-			result.L1DataMissMin = misses
-			result.BranchMisssMin = branchMisses
+			// result.L1DataMissMin = misses
+			// result.BranchMisssMin = branchMisses
 		} else if CPUElapsed > result.MaxTime {
 			result.MaxTime = CPUElapsed
 			result.MajorPageFaultCountMax = pageFaultsMajor
 			result.MinorPageFaultCountMax = pageFaultsMinor
-			result.L1DataMissMax = misses
-			result.BranchMissMax = branchMisses
+			// result.L1DataMissMax = misses
+			// result.BranchMissMax = branchMisses
 		}
 
 		result.numIterations++
 		result.totalPageFaults += pageFaultsMajor + pageFaultsMinor
+	}
+
+	for time.Now().Compare(endTime) == -1 {
+		r.Iteration(measure)
 	}
 
 	result.AvgTime = float64(result.TotalTime) / float64(result.numIterations)
