@@ -9,6 +9,7 @@ import { parseSweep, serializeSweep, sweepMatrix, unionSweep } from "./sweep";
 import { diagnostics } from "./dsl";
 import { buildErrorLine, harness, languages, num } from "./format";
 import { saveDraft, useBench } from "./state";
+import { compilerFlags } from "./compilerOptions";
 
 const state = useBench.getState;
 const message = (error: unknown) => error instanceof Error ? error.message : "The request failed. Try again.";
@@ -67,6 +68,9 @@ export async function runBench(query: QueryClient) {
   const snapshot = structuredClone(current.workspace);
   snapshot.title = snapshot.title.trim() || "Untitled bench";
   for (const lane of snapshot.lanes) {
+    try { compilerFlags(lane.build); } catch (error) {
+      return current.notify({ text: `Lane ${lane.label}: ${message(error)}`, error: true });
+    }
     const dsl = sourceOf(lane);
     const issues = lane.mode === "scaffold" ? diagnostics(dsl) : [...parseSections(dsl).errors,
       ...parseSweep(dsl).errors.map((message) => ({ message }))];
@@ -119,7 +123,7 @@ export async function runBench(query: QueryClient) {
         publish({ type: "perm_start", laneId: lane.id, index: index + 1, total: permutations.length, params });
         const response = await execute({
           name: `${snapshot.title} · Lane ${lane.label}`, byteCount: lane.execution?.byteCount ?? 0, fenced: lane.execution?.fenced ?? true,
-          language: lane.language, arch: `${target.os}/${target.arch === "x86_64" ? "amd64" : "arm64"}`,
+          language: lane.language, arch: `${target.os}/${target.arch === "x86_64" ? "amd64" : "arm64"}`, compilerFlags: compilerFlags(lane.build),
           code: assembleSections({ ...document.sections, sweep: serializeSweep(Object.entries(params).map(([name, value]) => ({ name, values: [value] }))) }),
         }, controller.signal);
         controller.signal.throwIfAborted();

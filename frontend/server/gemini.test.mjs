@@ -110,7 +110,11 @@ test("results CSV exports table measurements once with units, derived values and
   assert.equal(rows.length, 2);
   for (const row of rows) assert.equal(row.length, headers.length);
   assert.equal(value(rows[0], "Min time (ns)"), "0.123456789");
-  assert.equal(value(rows[0], "Min time per element (ns)"), String(0.123456789 / 1024));
+  assert.ok(!headers.includes("Min time per element (ns)"));
+  const { defaultChart } = await load("/src/chart/config.tsx");
+  const normalized = resultsCsv(run, { ...defaultChart, normalize: "element" });
+  const [normalizedHeaders, normalizedRow] = normalized.split("\r\n").map(cells);
+  assert.equal(normalizedRow[normalizedHeaders.indexOf("Min time per element (ns)")], String(0.123456789 / 1024));
   assert.equal(headers.filter((name) => name.startsWith("Lane")).length, 1);
   assert.equal(new Set(headers).size, headers.length);
   assert.ok(headers.every((name) => !name.startsWith("profiler.")));
@@ -122,4 +126,16 @@ test("results CSV exports table measurements once with units, derived values and
   assert.equal(value(rows[0], "Branch-prediction misses · fastest timed iteration"), "");
   assert.equal(value(rows[0], "Total page faults"), "0");
   assert.equal(value(rows[1], "Total page faults"), "");
+});
+
+test("compiler options preserve quoted arguments and reject unfinished input", async () => {
+  const { parseCompilerOptions, formatCompilerOptions, compilerFlags } = await load("/src/model/compilerOptions.ts");
+  const flags = ['-gcflags=all=-N -l', '-ldflags', '-X main.setting=a b'];
+  assert.deepEqual(parseCompilerOptions('-gcflags="all=-N -l" -ldflags \'-X main.setting=a b\''), flags);
+  const special = [...flags, "a'b", 'a"b', 'a\\b', 'a\nb', '$(literal)', ''];
+  assert.deepEqual(parseCompilerOptions(formatCompilerOptions(special)), special);
+  assert.deepEqual(compilerFlags({ flags }), flags);
+  assert.deepEqual(compilerFlags({ flags, compilerOptions: "" }), []);
+  assert.throws(() => parseCompilerOptions('-gcflags="-N'), /quote/);
+  assert.throws(() => parseCompilerOptions('abc\\'), /escaped/);
 });

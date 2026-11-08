@@ -288,3 +288,28 @@ func TestApplyEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestExecuteForwardsCompilerFlagsWithoutSplitting(t *testing.T) {
+	flags := []string{"-gcflags=all=-N -l", "-ldflags", "-X main.setting=a b"}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload LocalRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		actual, _ := json.Marshal(payload.CompilerFlags)
+		want, _ := json.Marshal(flags)
+		if string(actual) != string(want) {
+			t.Errorf("flags changed: %s, want %s", actual, want)
+		}
+		io.WriteString(w, localBody)
+	}))
+	defer target.Close()
+	var request map[string]any
+	json.Unmarshal([]byte(validBody), &request)
+	request["compilerFlags"] = flags
+	body, _ := json.Marshal(request)
+	response := post(t, newTestProxy(target.URL), string(body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("%d: %s", response.Code, response.Body.String())
+	}
+}

@@ -60,6 +60,18 @@ changes the default `-addr` to `:$PORT`.
 
 ### `POST /api/execute`
 
+The optional `compilerFlags` field is an array of command-line arguments. The proxy
+forwards it unchanged to the selected executor, preserving spaces inside arguments.
+For example: `"compilerFlags":["-gcflags=all=-N -l","-trimpath"]` for Go, or
+`"compilerFlags":["-OO","-B"]` for Python. Omit it or send `[]` to use defaults.
+Each request accepts up to 64 nonempty arguments, at most 4096 bytes each.
+
+Go supports `-gcflags`, `-asmflags`, `-ldflags`, `-tags`, `-pgo`, `-buildvcs`,
+`-race`, `-msan`, `-asan`, `-trimpath`, `-cover`, `-covermode`, `-coverpkg`,
+`-a`, `-v` and `-x`. Value flags accept either `-flag=value` or separate arguments.
+The executor retains control of the generated source file and output path.
+
+
 Website → proxy:
 
 ```json

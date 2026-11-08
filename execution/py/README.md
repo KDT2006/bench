@@ -34,6 +34,14 @@ curl http://127.0.0.1:6970/execute \
 
 `name` is required and `code` must contain `#bench`. `byteCount` defaults to zero
 and must be a nonnegative signed 64-bit integer; `fenced` defaults to false.
+Optional `compilerFlags` is an array of Python interpreter arguments, applied to
+every fresh benchmark process (for example `["-OO", "-B"]`). Supported flags are
+`-O`, `-OO`, `-B`, `-b`, `-bb`, `-u`, `-E`, `-I`, `-P`, `-s`, `-S`, `-d`,
+`-v`, `-vv`, `-q`, `-W`, `-X`, and `--check-hash-based-pycs`. `-W` and `-X`
+accept attached or separate values. `-O` removes assertions; `-OO` also removes
+docstrings. Empty options preserve interpreter defaults. Flags that replace the
+benchmark entrypoint, such as `-c` and `-m`, are rejected with `400`.
+
 Unknown JSON fields and bodies larger than 1 MiB are rejected. Requests must
 include `Content-Length` (as the proxy and curl do).
 

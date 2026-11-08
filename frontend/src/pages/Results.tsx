@@ -13,6 +13,7 @@ import { MachineDetails } from "../shell/MachineDetails";
 import { download } from "../model/download";
 import { resultsCsv } from "../model/resultsCsv";
 import { resultColumns } from "../model/resultColumns";
+import { compilerOptionsText } from "../model/compilerOptions";
 import { EditorSkeleton } from "../bench/Workbench";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
@@ -167,9 +168,10 @@ function RunConfiguration({ run }: { run: Run }) {
   return <section className="result-section">
     <h2>Configuration</h2>
     <div className="config-grid">{run.workspaceSnapshot.lanes.map((lane) => <details key={lane.id} className="config-lane" style={{ "--channel": laneVar(lane.label) } as React.CSSProperties}>
-      <summary><LaneBadge lane={lane} /> <strong>{languages[lane.language]}</strong><span className="help-text">Server default toolchain · {lane.arch} · {lane.mode === "ejected" ? "Code" : "Scaffold"}</span></summary>
+      <summary><LaneBadge lane={lane} /> <strong>{languages[lane.language]}</strong><span className="help-text">Server toolchain · {lane.arch} · {lane.mode === "ejected" ? "Code" : "Scaffold"}</span></summary>
       <div className="config-lane-body"><dl className="readouts">
-        <div><dt>Build and runner</dt><dd>Server defaults</dd></div>
+        <div><dt>{lane.language === "go" ? "Compiler options" : "Interpreter options"}</dt><dd><code>{compilerOptionsText(lane.build) || "Default"}</code></dd></div>
+        <div><dt>Runner</dt><dd>Server defaults</dd></div>
         <div><dt>Bytes per iteration</dt><dd>{lane.execution?.byteCount ?? 0}</dd></div><div><dt>Fenced timing</dt><dd>{(lane.execution?.fenced ?? true) ? "On" : "Off"}</dd></div>
         {lane.scaffold && <div><dt>Scaffold model</dt><dd>{lane.scaffold.model}</dd></div>}
       </dl>
@@ -192,7 +194,7 @@ function RunView({ run }: { run: Run }) {
   const sizes = run.sweep.filter((entry) => entry.values.every((value) => typeof value === "number"));
   const size = sizes.find((entry) => entry.name === url.get("size"))?.name ?? sizes.find((entry) => entry.name === "N")?.name ?? "";
   const norm = url.get("normalize");
-  const normalize: Normalize = !size || norm === "raw" ? "raw" : norm === "byte" ? "byte" : "element";
+  const normalize: Normalize = !size ? "raw" : norm === "element" ? "element" : norm === "byte" ? "byte" : "raw";
   const group = run.sweep.find((entry) => entry.name === url.get("group") && entry.name !== x?.name)?.name ?? "";
   const heatLane = run.workspaceSnapshot.lanes.find((lane) => lane.id === url.get("heatLane"))?.id ?? run.workspaceSnapshot.lanes[0]?.id ?? "";
   const requestedYScale = url.get("yScale");

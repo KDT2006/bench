@@ -9,7 +9,7 @@ export interface ChartSettings {
   type: ChartType; metric: Metric; stat: Statistic; x: string; logX: boolean; yScale: YScale;
   normalize: Normalize; size: string; group: string; compareMetric: Metric; heatLane: string;
 }
-export const defaultChart: ChartSettings = { type: "line", metric: "timeNs", stat: "min", x: "N", logX: true, yScale: "auto", normalize: "element", size: "N", group: "", compareMetric: "cycles", heatLane: "" };
+export const defaultChart: ChartSettings = { type: "line", metric: "timeNs", stat: "min", x: "N", logX: true, yScale: "auto", normalize: "raw", size: "N", group: "", compareMetric: "cycles", heatLane: "" };
 export const shapes = { A: "circle", B: "rect", C: "triangle", D: "diamond" };
 
 export function LaneBadge({ lane }: { lane: Lane }) {

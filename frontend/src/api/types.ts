@@ -33,6 +33,7 @@ export interface Lane {
 export interface BuildOptions {
   toolchainVersion: string;  // "go1.23", "cpython3.13"
   flags: string[];           // validated server-side
+  compilerOptions?: string; // Editable command line, including unfinished quotes.
   env: Record<string, string>;
 }
 
@@ -101,6 +102,7 @@ export interface ProxyHealth {
   unavailable: { language: string; message: string }[];
 }
 export interface ExecuteRequest {
+  compilerFlags?: string[];
   name: string; byteCount: number; fenced: boolean; code: string; language: Lang; arch: string;
 }
 export interface CounterAvailability { l1DataMisses: boolean; branchMisses: boolean; }

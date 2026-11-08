@@ -17,6 +17,7 @@ import { starterLane } from "../model/examples";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
 import LaneOptions from "./LaneOptions";
+import CompilerOptions from "./CompilerOptions";
 import RunPanel from "./RunPanel";
 
 const Editor = lazy(() => import("./Editor"));
@@ -128,7 +129,7 @@ function LanePane({ lane, file, linked, editable, machine, setFile, setConfirm, 
       if (entry.mode === "ejected") delete files[harness(entry.language)];
       delete files[harness(language)];
       return { ...entry, language, scaffold: undefined, files, build: {
-        ...entry.build, flags: [], env: {}, toolchainVersion: "",
+        ...entry.build, flags: [], compilerOptions: "", env: {}, toolchainVersion: "",
       } };
     });
     if (lane.mode === "ejected" && harnessText) setConfirm({ title: "Change language?", text: "This discards the hand-written harness for this lane.", action: "Change language", run: update });
@@ -198,6 +199,7 @@ function LanePane({ lane, file, linked, editable, machine, setFile, setConfirm, 
       </div>}
     </div>
     {active && ["queued", "building", "running"].includes(active) && snapshot && <div className="lane-progress"><i style={{ transform: `scaleX(${total?.type === "perm_start" ? progress / total.total : 0})` }} /></div>}
+    <CompilerOptions lane={lane} readOnly={!editable || preparingRun} />
     <div className="file-strip">
       <div className="tab-strip" role="tablist" aria-label={`Lane ${lane.label} files`}>{laneFiles(lane).map((name) =>
         <button type="button" role="tab" aria-selected={file === name} key={name} title={name} onClick={() => { flushEditors(); setFile(name); }}>

@@ -28,20 +28,22 @@ const bodyLimit = 1 << 20 // 1 MiB
 
 // ExecuteRequest is what the website sends to the proxy.
 type ExecuteRequest struct {
-	Name      string `json:"name"`
-	ByteCount int64  `json:"byteCount"`
-	Fenced    bool   `json:"fenced"`
-	Code      string `json:"code"` // high-level code with the #directives
-	Language  string `json:"language"`
-	Arch      string `json:"arch"` // OS/architecture, e.g. linux/amd64
+	CompilerFlags []string `json:"compilerFlags,omitempty"`
+	Name          string   `json:"name"`
+	ByteCount     int64    `json:"byteCount"`
+	Fenced        bool     `json:"fenced"`
+	Code          string   `json:"code"` // high-level code with the #directives
+	Language      string   `json:"language"`
+	Arch          string   `json:"arch"` // OS/architecture, e.g. linux/amd64
 }
 
 // LocalRequest is what the proxy sends to a local execution server.
 type LocalRequest struct {
-	Name      string `json:"name"`
-	ByteCount int64  `json:"byteCount"`
-	Fenced    bool   `json:"fenced"`
-	Code      string `json:"code"`
+	CompilerFlags []string `json:"compilerFlags,omitempty"`
+	Name          string   `json:"name"`
+	ByteCount     int64    `json:"byteCount"`
+	Fenced        bool     `json:"fenced"`
+	Code          string   `json:"code"`
 }
 
 // backends maps "language/os/arch" (e.g. "go/linux/amd64") to a local server's execute URL.
@@ -273,7 +275,7 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, _ := json.Marshal(LocalRequest{Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
+	body, _ := json.Marshal(LocalRequest{CompilerFlags: req.CompilerFlags, Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
 	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "Could not build the request to the local server: %v", err)
@@ -325,6 +327,14 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 }
 
 func validate(req ExecuteRequest) string {
+	if len(req.CompilerFlags) > 64 {
+		return "compilerFlags must contain at most 64 arguments."
+	}
+	for _, arg := range req.CompilerFlags {
+		if arg == "" || len(arg) > 4096 || strings.ContainsRune(arg, 0) {
+			return "compilerFlags must contain nonempty arguments of at most 4096 bytes, without NUL characters."
+		}
+	}
 	switch {
 	case strings.TrimSpace(req.Name) == "":
 		return "name is required."

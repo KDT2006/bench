@@ -2,6 +2,8 @@ import type { Lane, RunnerOptions } from "../api/types";
 import { languages } from "../model/format";
 import { useBench } from "../model/state";
 import { Overlay } from "../shell/Overlay";
+import CompilerOptions from "./CompilerOptions";
+import { formatCompilerOptions } from "../model/compilerOptions";
 
 const counters: { value: RunnerOptions["counters"][number]; label: string }[] = [
   { value: "cycles", label: "Cycles" }, { value: "time", label: "Time" }, { value: "pageFaults", label: "Page faults" },
@@ -11,7 +13,7 @@ const SERVER_DEFAULT = "Server default";
 
 export default function LaneOptions({ lane, close }: { lane: Lane; close: () => void }) {
   const change = useBench((s) => s.changeLane);
-  const build = (patch: Partial<Lane["build"]>) => change(lane.id, (current) => ({ ...current, build: { ...current.build, ...patch } }));
+  const build = (patch: Partial<Lane["build"]>) => change(lane.id, (current) => ({ ...current, build: { ...current.build, ...patch, ...(patch.flags ? { compilerOptions: formatCompilerOptions(patch.flags) } : {}) } }));
   const runner = (patch: Partial<RunnerOptions>) => change(lane.id, (current) => ({ ...current, runner: { ...current.runner, ...patch } }));
   const execution = (patch: Partial<NonNullable<Lane["execution"]>>) => change(lane.id, (current) => ({
     ...current, execution: { byteCount: current.execution?.byteCount ?? 0, fenced: current.execution?.fenced ?? true, ...patch },
@@ -40,7 +42,7 @@ export default function LaneOptions({ lane, close }: { lane: Lane; close: () => 
       </section>
       <section>
         <h3>Build</h3>
-        <p className="help-text">Build and runner settings are saved with the bench. The current executor builds and times with its own defaults and does not apply them yet.</p>
+        <p className="help-text">Compiler options are applied to each run. Toolchain selection, environment overrides and runner controls are saved with the bench but are not applied yet.</p>
         <label>{languages[lane.language]} toolchain<select value={lane.build.toolchainVersion || toolchains[0]} onChange={(e) => build({ toolchainVersion: e.target.value })}>{toolchains.map((version) => <option key={version}>{version}</option>)}</select></label>
         {go ? <>
           <div className="segmented" aria-label="Compiler preset">
@@ -52,9 +54,7 @@ export default function LaneOptions({ lane, close }: { lane: Lane; close: () => 
           <label className="check-setting"><input type="checkbox" checked={lane.build.flags.includes("-O")} onChange={(e) => build({ flags: e.target.checked ? [...lane.build.flags, "-O"] : lane.build.flags.filter((flag) => flag !== "-O") })} /> Optimize bytecode (-O)</label>
           <label>PYTHONHASHSEED<input inputMode="numeric" value={lane.build.env.PYTHONHASHSEED ?? ""} onChange={(e) => env("PYTHONHASHSEED", e.target.value)} spellCheck={false} /></label>
         </>}
-        <label>Extra flags<textarea key={lane.language} spellCheck={false} defaultValue={lane.build.flags.filter((flag) => !flag.startsWith("-gcflags=") && flag !== "-O").join("\n")} onBlur={(e) => build({
-          flags: [...lane.build.flags.filter((flag) => flag.startsWith("-gcflags=") || flag === "-O"), ...e.target.value.split("\n").map((flag) => flag.trim()).filter(Boolean)],
-        })} /><small>Enter one flag per line.</small></label>
+        <CompilerOptions lane={lane} />
       </section>
       <section>
         <h3>Runner</h3>

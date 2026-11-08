@@ -69,7 +69,9 @@ Sweeps accept integer JSON lists and form a Cartesian product, with up to 256 co
 
 The generated harness tab contains executable directive-separated code, not a standalone program. **Edit as code** allows editing those same sections directly. Setup and cleanup run for every iteration, outside the timed bench section. Sweep parameters are injected before setup. Go imports are import specifications; the harness already provides `encoding/json`, `fmt`, `os`, `profiler`, and `time`.
 
-The executor controls the run window (currently ten seconds per combination) and compiler settings. Lanes always use the server's architecture. Bytes per iteration and fenced timing are sent with each request; a zero byte count leaves throughput unavailable. The lane **Options** drawer also stores compiler, environment and runner settings with the workspace, but they are not sent to the executor yet.
+The executor controls the run window (currently ten seconds per combination). Each lane has a compact compiler/interpreter options field: Go accepts build flags such as `-gcflags="all=-N -l" -trimpath`, and Python accepts interpreter flags such as `-OO -B`. Quoting groups arguments; no shell expansion is performed. Options are sent as a `compilerFlags` string array through the proxy and applied to every sweep combination. Empty options use server defaults. Invalid or unsupported options report an error. Run snapshots retain the options used.
+
+Lanes use their executor's architecture. Bytes per iteration and fenced timing are sent with each request; a zero byte count leaves throughput unavailable. Toolchain selection, environment overrides and runner controls in the **Options** drawer remain saved settings and are not applied yet.
 
 **Cancel run** aborts the current request, stops later requests, and retains completed results. Results can be viewed and exported in the current tab; refreshing loses these live run records. The workspace itself is autosaved in the browser; use **Export bench** to keep a copy.
 

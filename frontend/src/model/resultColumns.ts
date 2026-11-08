@@ -23,7 +23,7 @@ export function resultColumns(run: Run, settings: ChartSettings): ResultColumn[]
     timed("time", "Min time", (row) => row.metrics.timeNs?.min),
     timed("timeMax", "Max time", (row) => row.metrics.timeNs?.max),
     timed("timeAvg", "Mean time", (row) => row.metrics.timeNs?.mean),
-    ...(settings.size ? [timed("perSize", `Min time per ${settings.normalize === "byte" ? "byte" : "element"}`, (row) => {
+    ...(settings.size && settings.normalize !== "raw" ? [timed("perSize", `Min time per ${settings.normalize === "byte" ? "byte" : "element"}`, (row) => {
       const size = row.params[settings.size];
       return typeof size === "number" && size > 0 && row.metrics.timeNs?.min !== undefined ? row.metrics.timeNs.min / size : undefined;
     })] : []),

@@ -44,7 +44,7 @@ export default function RunPanel({ workspace, onJump, onResize, editable }: {
   const metric = "timeNs";
   const ratios = laneRatio(rows, activeLanes, metric, "min");
   const sizeName = activeSweep.find((entry) => entry.name === "N")?.name ?? activeSweep[0]?.name ?? "";
-  const settings = useMemo<ChartSettings>(() => ({ ...defaultChart, metric, x: sizeName, size: sizeName, normalize: sizeName ? "element" as const : "raw" as const }), [metric, sizeName]);
+  const settings = useMemo<ChartSettings>(() => ({ ...defaultChart, metric, x: sizeName, size: sizeName }), [metric, sizeName]);
   const running = pending || Boolean(active && ["queued", "building", "running"].includes(active.status));
   const logs = active?.events ?? [];
   const progress = logs.findLast(({ event }) => event.type === "perm_start")?.event;
@@ -69,7 +69,7 @@ export default function RunPanel({ workspace, onJump, onResize, editable }: {
       {layout.panel === "live" && <div className="live-grid">
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading chart…</div>}>
           <Instrument rows={rows} lanes={activeLanes} sweep={activeSweep} settings={settings} beam={running}
-            caption={rows.length ? "Each point is one measured input. Lower points mean less time per element." : undefined}
+            caption={rows.length ? "Each point is one measured input. Lower points mean less time for one complete iteration." : undefined}
             tableHref={active && !running ? `/results/${active.id}#results-table` : "#quick-results"} />
         </Suspense>
         <aside className="live-readouts">
