@@ -1,61 +1,91 @@
-# Benchscope server
+# Benchscope proxy
 
-The middle man between the website and profiler agents. The website submits a run, an agent
-picks it up by polling, and the agent's events are relayed back to the website over SSE. It
-implements [SCHEMA.md](SCHEMA.md) with the Go standard library only.
+Sits between the website and the local execution servers. Go standard library only.
 
-| File | What it does |
-|---|---|
-| `main.go` | Flags, environment, HTTP server and shutdown |
-| `server.go` | Shared state, routes, CORS, JSON helpers, saving to the data directory |
-| `website.go` | Website API: machines, runs (and their SSE stream), benches, shares |
-| `agent.go` | Agent API: register, poll, and translating agent events into run events |
-| `sweep.go` | Reads `#sweep` from `benchmark.perf` to build the job's permutations |
+```
+website  --POST /api/execute-->  proxy  --POST /execute-->  local Go server (:6969)
+```
+
+## Run
 
 ```sh
 cd proxy
-BENCHSCOPE_AGENT_TOKEN=change-me go run . -data .benchscope-server
-go test -race ./...
+go run . -addr 127.0.0.1:8080
 ```
 
-Point the website at it with `VITE_API_BASE_URL=http://localhost:8080/api`. Agents use the same
-base URL: `POST /api/agent/register`, `/api/agent/poll`, `/api/agent/jobs/{jobId}/events`.
+| Flag | Default | Meaning |
+|---|---|---|
+| `-addr` | `:8080` | Listen address |
+| `-go-url` | `http://127.0.0.1:6969/execute` | Local Go server |
+| `-python-url` | empty (disabled) | Local Python server |
+| `-allow-origin` | `*` | `Access-Control-Allow-Origin`; empty disables CORS headers |
 
-| Setting | Flag | Environment | Default |
-|---|---|---|---|
-| Agent Bearer token (required) | — | `BENCHSCOPE_AGENT_TOKEN` | — |
-| Listen address | `-addr` | `BENCHSCOPE_ADDR` | `:8080` |
-| Route prefix (website and agent) | `-prefix` | `BENCHSCOPE_PREFIX` | `/api` |
-| Data directory (benches, shares, runs) | `-data` | `BENCHSCOPE_DATA_DIR` | in memory |
-| Extra origins for cross-origin calls, or `*` | `-allow-origin` | `BENCHSCOPE_ALLOWED_ORIGINS` | none |
+## Routes
 
-## Behaviour the schema leaves open
+### `POST /api/execute`
 
-- **One machine and one sweep per run.** A job carries one `sweep`, so `POST /runs` returns `422`
-  when lanes have different `#sweep` values. It returns `400` when lanes use different
-  architectures.
-- **No machine available.** `POST /runs` returns `503` when no online machine has the lanes'
-  arch and languages (`capabilities.languages`). Among the ones that do, the server picks the
-  shortest queue. A queued run waits for its machine even while that machine is offline. The
-  website can cancel it.
-- **Lost jobs.** If the agent polls 5 times (about 10 s) without reporting the job it was handed,
-  the run fails. This happens when the poll response was lost or the agent dropped the job.
-  It also fails if the agent registers again during a job (a restart). An agent that reports
-  `busy` with a job the server is not running gets `cancel: true`.
-- **Cancel before the agent confirms.** If the machine goes offline after the website asked to
-  cancel, the run ends as `cancelled`, not `failed`.
-- **Light validation.** The server checks only what it needs to relay a run: 1–4 lanes with
-  unique IDs, one architecture, a harness file per lane and a valid `#sweep`. Build and runner
-  options are passed to the agent untouched, and agent events are relayed without checking
-  every field.
-- **Restarts.** Jobs and machines live in memory. Runs are written to disk when they are
-  created and when they finish. A run still active at shutdown is loaded as `failed`.
-- **SSE.** A finished stream with nothing left to send answers `204`, so `EventSource` does not
-  reconnect. Idle streams get a comment line every 15 s.
-- **Extras.** Each `perm.result` (minus `samples`, which are in the row) and each build's
-  toolchain are kept in the run file's `extras`. They are not sent to the website (section 6).
-- **No code generation.** The website translates `benchmark.perf` into `harness.go` or
-  `harness.py` in the browser. `POST /runs` requires the harness file in every lane.
-- **Fixtures.** `fixtures/run.json` is a copy of `frontend/mock/fixtures/run.json`, served as
-  `GET /runs/sample-array-sum`. `fixtures/examples.json` is served as-is by `GET /examples`
-  and mirrors `frontend/src/model/examples.ts`. Update them together.
+Website → proxy:
+
+```json
+{ "name": "Sort ints", "byteCount": 0, "fenced": true, "code": "#setup\n...\n#bench\n...", "language": "go", "arch": "linux/amd64" }
+```
+
+`name`, `code`, `language` and `arch` are required; `byteCount` must be ≥ 0.
+
+Proxy → local server (`language` and `arch` are dropped):
+
+```json
+{ "name": "Sort ints", "byteCount": 0, "fenced": true, "code": "..." }
+```
+
+The local server answers `{"results": [...]}` (one entry per `#sweep` combination) with snake_case
+fields and raw tick counts. The proxy converts each entry and returns `200`:
+
+```json
+{
+  "results": [{
+    "name": "sort (n=100)", "byteCount": 8000, "fenced": true,
+    "timerFrequency": 3302311791, "runWindowNanos": 10000000000, "runWindowMillis": 10000,
+    "iterations": 13296057, "totalPageFaults": 50,
+    "measurements": {
+      "numIterations": 13296057, "totalPageFaults": 50,
+      "MinTime": 220, "MaxTime": 14386867, "TotalTime": 4255299868, "AvgTime": 320.04,
+      "GigabytesPerSecondMin": 111.8, "GigabytesPerSecondMax": 0.0017, "GigabytesPerSecondAvg": 76.9,
+      "MajorPageFaultCountMin": 0, "MinorPageFaultCountMin": 0,
+      "MajorPageFaultCountMax": 0, "MinorPageFaultCountMax": 0, "PageFaultCountAvg": 0.0000038,
+      "L1DataMissMin": 0, "L1DataMissMax": 0, "BranchMisssMin": 0, "BranchMissMax": 0
+    },
+    "timeMs": { "min": 0.0000666, "max": 4.357, "avg": 0.0000969, "total": 1288.6 }
+  }]
+}
+```
+
+- `MinTime`/`MaxTime`/`TotalTime`/`AvgTime` are timer ticks; `timeMs` is milliseconds per iteration (`total` is all iterations).
+- `GigabytesPerSecondMin` comes from `MinTime` (fastest iteration), as in the profiler. Throughput is `0` when `byteCount` or `timerFrequency` is `0`; `timeMs` is all `0` when `timerFrequency` is `0`.
+- Min/Max page-fault, L1 and branch counts belong to the fastest/slowest iteration.
+
+The conversion lives in `schema.go`.
+
+Errors are `{"message": "..."}`:
+
+| Status | When |
+|---|---|
+| `400` | Bad JSON, missing field, or no local server for the language |
+| `413` | Body over 1 MiB |
+| `502` | Local server unreachable, returned non-2xx (its message, e.g. a compile error, is included), or returned something other than `{"results": [...]}` |
+
+### `GET /api/health`
+
+Describes the machine the proxy runs on (the local servers are expected on the same machine):
+
+```json
+{ "status": "ok", "hostname": "box", "os": "linux", "arch": "amd64", "cpus": 8, "languages": ["go"] }
+```
+
+`languages` lists the languages with a configured local server.
+
+## Test
+
+```sh
+go test ./...
+```

@@ -1,78 +1,235 @@
-// Command benchscope-proxy is the middle man between the website and profiler agents.
-// The website submits runs, agents poll for jobs and post events back, and the server relays
-// those events to the website over SSE. See SCHEMA.md for the protocol.
+// Command benchscope-proxy sits between the website and the local execution servers.
+//
+// The website sends POST /api/execute with {name, byteCount, fenced, code, language, arch}.
+// The proxy drops language and arch, forwards {name, byteCount, fenced, code} to the local
+// server for that language, and converts the local server's raw results (see schema.go) into the
+// shape the website reads.
 package main
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"os/signal"
+	"runtime"
+	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
-func env(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
-	}
-	return fallback
+const bodyLimit = 1 << 20 // 1 MiB
+
+// ExecuteRequest is what the website sends to the proxy.
+type ExecuteRequest struct {
+	Name      string `json:"name"`
+	ByteCount int64  `json:"byteCount"`
+	Fenced    bool   `json:"fenced"`
+	Code      string `json:"code"` // high-level code with the #directives
+	Language  string `json:"language"`
+	Arch      string `json:"arch"` // OS/architecture, e.g. linux/amd64
+}
+
+// LocalRequest is what the proxy sends to a local execution server.
+type LocalRequest struct {
+	Name      string `json:"name"`
+	ByteCount int64  `json:"byteCount"`
+	Fenced    bool   `json:"fenced"`
+	Code      string `json:"code"`
+}
+
+type proxy struct {
+	backends map[string]string // language -> local server execute URL
+	client   *http.Client
+	origin   string // value for Access-Control-Allow-Origin; empty disables CORS headers
 }
 
 func main() {
-	addr := flag.String("addr", env("BENCHSCOPE_ADDR", ":8080"), "listen address (BENCHSCOPE_ADDR)")
-	prefix := flag.String("prefix", env("BENCHSCOPE_PREFIX", "/api"), "path prefix for all routes; match VITE_API_BASE_URL (BENCHSCOPE_PREFIX)")
-	dataDir := flag.String("data", env("BENCHSCOPE_DATA_DIR", ""), "directory for benches, shares and runs; empty keeps them in memory (BENCHSCOPE_DATA_DIR)")
-	origins := flag.String("allow-origin", env("BENCHSCOPE_ALLOWED_ORIGINS", ""), "comma-separated origins allowed to call the API across origins, or * (BENCHSCOPE_ALLOWED_ORIGINS)")
+	addr := flag.String("addr", ":8080", "listen address")
+	goURL := flag.String("go-url", "http://127.0.0.1:6969/execute", "execute URL of the local Go server")
+	pythonURL := flag.String("python-url", "", "execute URL of the local Python server; empty disables Python")
+	origin := flag.String("allow-origin", "*", "origin allowed to call the proxy from a browser; empty disables CORS")
 	flag.Parse()
 
-	token := os.Getenv("BENCHSCOPE_AGENT_TOKEN")
-	if token == "" {
-		log.Fatal("Set BENCHSCOPE_AGENT_TOKEN to the token profiler agents send as a Bearer token.")
+	backends := map[string]string{"go": *goURL}
+	if *pythonURL != "" {
+		backends["python"] = *pythonURL
 	}
-	var allowed []string
-	for _, origin := range strings.Split(*origins, ",") {
-		if origin = strings.TrimRight(strings.TrimSpace(origin), "/"); origin != "" {
-			allowed = append(allowed, origin)
-		}
-	}
-
-	srv, err := newServer(token, *dataDir, allowed)
-	if err != nil {
-		log.Fatal(err)
+	p := &proxy{
+		backends: backends,
+		// Benchmarks compile and then run for several seconds per sweep combination.
+		client: &http.Client{Timeout: 15 * time.Minute},
+		origin: *origin,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	go srv.watchMachines(ctx)
-
-	httpServer := &http.Server{
+	server := &http.Server{
 		Addr:              *addr,
-		Handler:           srv.handler(strings.TrimRight(*prefix, "/")),
+		Handler:           p.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		// No WriteTimeout: event streams stay open for the whole run. Request contexts end on
-		// SIGINT/SIGTERM, so open streams close and shutdown can finish.
-		BaseContext: func(net.Listener) context.Context { return ctx },
+		// No WriteTimeout: the response waits for the benchmark to finish.
 	}
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(shutdown)
-	}()
-
-	log.Printf("Benchscope server listening on %s (routes under %q)", *addr, *prefix)
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	log.Printf("benchscope proxy listening on %s, backends: %v", *addr, backends)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-	<-drained // let in-flight requests (and their disk writes) finish
+}
+
+func (p *proxy) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", p.health)
+	mux.HandleFunc("POST /api/execute", p.execute)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fail(w, http.StatusNotFound, "No route matches %s %s.", r.Method, r.URL.Path)
+	})
+	return p.withCORS(mux)
+}
+
+func (p *proxy) withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p.origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", p.origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Health describes the machine the proxy runs on. The local servers are expected to run on the
+// same machine, so the website uses this as its machine snapshot.
+type Health struct {
+	Status    string   `json:"status"`
+	Hostname  string   `json:"hostname"`
+	OS        string   `json:"os"`
+	Arch      string   `json:"arch"` // Go names: amd64, arm64
+	CPUs      int      `json:"cpus"`
+	Languages []string `json:"languages"` // languages with a configured local server
+}
+
+func (p *proxy) health(w http.ResponseWriter, r *http.Request) {
+	hostname, _ := os.Hostname()
+	languages := make([]string, 0, len(p.backends))
+	for language := range p.backends {
+		languages = append(languages, language)
+	}
+	sort.Strings(languages)
+	writeJSON(w, http.StatusOK, Health{
+		Status: "ok", Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH,
+		CPUs: runtime.NumCPU(), Languages: languages,
+	})
+}
+
+func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
+	var req ExecuteRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, bodyLimit))
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			fail(w, http.StatusRequestEntityTooLarge, "Request body must be smaller than 1 MiB.")
+		} else {
+			fail(w, http.StatusBadRequest, "Invalid JSON body: %v", err)
+		}
+		return
+	}
+	if msg := validate(req); msg != "" {
+		fail(w, http.StatusBadRequest, "%s", msg)
+		return
+	}
+	language := strings.ToLower(strings.TrimSpace(req.Language))
+	target, ok := p.backends[language]
+	if !ok {
+		fail(w, http.StatusBadRequest, "No local server is configured for language %q.", req.Language)
+		return
+	}
+
+	body, _ := json.Marshal(LocalRequest{Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
+	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "Could not build the request to the local server: %v", err)
+		return
+	}
+	upstream.Header.Set("Content-Type", "application/json")
+
+	log.Printf("execute %q (%s, %s) -> %s", req.Name, language, req.Arch, target)
+	start := time.Now()
+	resp, err := p.client.Do(upstream)
+	if err != nil {
+		fail(w, http.StatusBadGateway, "Could not reach the %s local server at %s: %v", language, target, err)
+		return
+	}
+	defer resp.Body.Close()
+	result, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fail(w, http.StatusBadGateway, "Could not read the local server's response: %v", err)
+		return
+	}
+	log.Printf("execute %q finished with %d in %s", req.Name, resp.StatusCode, time.Since(start).Round(time.Millisecond))
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// Pass the local server's error text through so the website can show it.
+		msg := strings.TrimSpace(string(result))
+		var structured struct {
+			Message string `json:"message"`
+			Error   string `json:"error"`
+		}
+		if json.Unmarshal(result, &structured) == nil {
+			if structured.Message != "" {
+				msg = structured.Message
+			} else if structured.Error != "" {
+				msg = structured.Error
+			}
+		}
+		if msg == "" {
+			msg = http.StatusText(resp.StatusCode)
+		}
+		fail(w, http.StatusBadGateway, "Local server returned %d: %s", resp.StatusCode, msg)
+		return
+	}
+	converted, err := convertResponse(result)
+	if err != nil {
+		fail(w, http.StatusBadGateway, "Local server returned an unexpected response: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, converted)
+}
+
+func validate(req ExecuteRequest) string {
+	switch {
+	case strings.TrimSpace(req.Name) == "":
+		return "name is required."
+	case req.ByteCount < 0:
+		return "byteCount must be zero or more."
+	case strings.TrimSpace(req.Code) == "":
+		return "code is required."
+	case strings.TrimSpace(req.Language) == "":
+		return "language is required."
+	case strings.TrimSpace(req.Arch) == "":
+		return "arch is required."
+	}
+	return ""
+}
+
+func writeRaw(w http.ResponseWriter, status int, data []byte) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	data, _ := json.Marshal(value)
+	writeRaw(w, status, data)
+}
+
+func fail(w http.ResponseWriter, status int, format string, args ...any) {
+	writeJSON(w, status, map[string]string{"message": fmt.Sprintf(format, args...)})
 }
