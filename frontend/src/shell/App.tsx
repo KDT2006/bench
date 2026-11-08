@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
@@ -22,17 +22,17 @@ import { motion, useReducedMotion } from "motion/react";
 
 const Workbench = lazy(() => import("../bench/Workbench"));
 const Launch = lazy(() => import("../pages/Launch"));
-const Landing = lazy(() => import("../pages/Landing"));
+const Docs = lazy(() => import("../pages/Docs"));
 const Results = lazy(() => import("../pages/Results"));
 const Examples = lazy(() => import("../pages/Examples"));
 const Guide = lazy(() => import("../pages/Guide"));
 const mobileQuery = matchMedia("(width < 768px)");
 
 function Brand() {
-  return <Link to="/" className="brand" aria-label="Benchscope home"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+  return <Link to="/" className="brand" aria-label="Bench.it home"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
     <rect x="1" y="1" width="22" height="22" rx="5" fill="none" stroke="currentColor" strokeWidth="1.4"/>
     <path d="M5 16h5v-4h4V8h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-  </svg><span>Benchscope</span></Link>;
+  </svg><span>Bench.it</span></Link>;
 }
 
 function Toast() {
@@ -54,10 +54,8 @@ function Toast() {
 }
 
 const nav = [
-  { path: "/welcome", label: "Welcome" },
+  { path: "/docs", label: "Docs" },
   { path: "/bench", label: "Workbench" },
-  { path: "/examples", label: "Examples" },
-  { path: "/guide", label: "Guide" },
 ];
 
 type Dialog = "settings" | "machine" | "commands" | "shortcuts" | "menu";
@@ -79,7 +77,7 @@ function useTheme() {
 }
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
-  return nav.map(({ path, label }) => <NavLink key={path} to={path} end onClick={onNavigate}>{label}</NavLink>);
+  return nav.map(({ path, label }) => <NavLink key={path} to={path} onClick={onNavigate}>{label}</NavLink>);
 }
 
 function RouteStub({ title, children }: { title: string; children: string }) {
@@ -150,7 +148,7 @@ export function App() {
   useTheme();
   useDraftPersistence();
   const navigate = useNavigate();
-  const { pathname, hash, state, key } = useLocation();
+  const { pathname, search, hash, state, key } = useLocation();
   const reduced = useReducedMotion();
   const blendWorkbench = pathname === "/bench" && Boolean(state?.launchOrigin) && !reduced;
   const query = useQueryClient();
@@ -166,8 +164,7 @@ export function App() {
     return () => mobileQuery.removeEventListener("change", notify);
   }, () => mobileQuery.matches);
   const landing = pathname === "/";
-  const welcome = pathname === "/welcome";
-  useEffect(() => { document.title = landing ? "Bench.it" : "Benchscope"; }, [landing]);
+  useEffect(() => { document.title = "Bench.it"; }, []);
   useEffect(() => { if (!hash) window.scrollTo(0, 0); }, [pathname, hash]);
   const mac = /Mac|iPad|iPhone/.test(navigator.platform);
   const shortcut = mac ? "⌘K" : "Ctrl+K";
@@ -233,11 +230,10 @@ export function App() {
   return (
     <>
       <a className="skip-link control primary" href="#main">Skip to content</a>
-      {landing || welcome ? <header className={`landing-nav${landing ? " launch-nav" : ""}`}>
+      {landing ? <header className="landing-nav launch-nav">
         <Brand />
-        <nav aria-label="Main navigation"><NavLink to="/welcome">Welcome</NavLink>{!landing && <><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link></>}</nav>
+        <nav aria-label="Main navigation"><NavLink to="/docs">Docs</NavLink></nav>
         <button type="button" className="control icon-control landing-settings" aria-label="Settings" title="Settings" onClick={() => setDialog("settings")}><GearIcon size={20} aria-hidden="true" /></button>
-        {!landing && <Link className="control primary" to="/bench" onMouseEnter={() => void import("../bench/Workbench")} onFocus={() => void import("../bench/Workbench")}>Open the workbench</Link>}
       </header> : <header className={`top-bar${blendWorkbench ? " bench-enter" : ""}`}>
         <div className="top-bar-inner">
           <Brand />
@@ -287,11 +283,16 @@ export function App() {
         <Suspense fallback={<div className="page route-loading loading-state" role="status"><span className="sr-only">Loading page…</span><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>}>
           <Routes>
             <Route path="/" element={<Launch />} />
-            <Route path="/welcome" element={<Landing />} />
+            <Route path="/welcome" element={<Navigate to="/docs/examples" replace />} />
             <Route path="/bench" element={<Workbench machines={machines.data} />} />
             <Route path="/results/:runId" element={<Results />} />
-            <Route path="/examples" element={<Examples />} />
-            <Route path="/guide" element={<Guide />} />
+            <Route path="/docs" element={<Docs />}>
+              <Route index element={<Navigate to="examples" replace />} />
+              <Route path="examples" element={<Examples />} />
+              <Route path="guide" element={<Guide />} />
+            </Route>
+            <Route path="/examples" element={<Navigate to={`/docs/examples${search}${hash}`} replace />} />
+            <Route path="/guide" element={<Navigate to={`/docs/guide${search}${hash}`} replace />} />
             <Route path="*" element={<RouteStub title="Page not found">Check the address or open the workbench.</RouteStub>} />
           </Routes>
         </Suspense>

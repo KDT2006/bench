@@ -94,7 +94,7 @@ const dslExtras = [
       const description = document.createElement("p");
       description.textContent = entry.description;
       const link = document.createElement("a");
-      link.href = `/guide#${entry.name}`;
+      link.href = `/docs/guide#${entry.name}`;
       link.textContent = "Open in guide";
       dom.append(signature, description, link);
       return { dom };

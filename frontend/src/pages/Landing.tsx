@@ -64,7 +64,7 @@ export default function Landing() {
         transition={{ duration: reduced ? 0 : 0.7, ease: [0.16, 1, 0.3, 1] }}>
         <h1>See where your code<br className="hero-break" /> spends its cycles.<svg className="hero-trace" aria-hidden="true" viewBox="0 0 84 24"><path d="M1 20H21V14H43V17H62V5H83" /><circle cx="21" cy="14" r="2.2"/><circle cx="43" cy="17" r="2.2"/><circle cx="62" cy="5" r="2.2"/><circle cx="83" cy="5" r="2.2"/></svg></h1>
         <p>Write a benchmark in pseudocode, run it in Go or Python, and compare the results side by side.</p>
-        <div className="hero-actions"><BenchLink /><Link className="control landing-button" to="/examples">Browse examples</Link></div>
+        <div className="hero-actions"><BenchLink /><Link className="control landing-button" to="/docs/examples">Browse examples</Link></div>
       </motion.div>
       <div className="hero-instrument">
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading sweep…</div>}>
@@ -108,7 +108,7 @@ export default function Landing() {
     </section>
     <section className="landing-close"><div className="page"><h2>Pick an example and press run.</h2><BenchLink /></div></section>
     <footer className="landing-footer"><div className="page">
-      <Link className="brand" to="/">Benchscope</Link><ServerStatus /><nav aria-label="Footer"><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link></nav>
+      <Link className="brand" to="/">Bench.it</Link><ServerStatus /><nav aria-label="Footer"><Link to="/docs/examples">Examples</Link><Link to="/docs/guide">Guide</Link></nav>
       <details><summary>Photo credits</summary><div><a href="https://commons.wikimedia.org/wiki/File:Circuit_board_Closeup_(24884297897).jpg">Circuit board, Jonathan Cutrer (CC BY 2.0)</a><a href="https://commons.wikimedia.org/wiki/File:RAM-chips.jpg">RAM chips, Hannes Grobe (CC BY-SA 4.0)</a><p>Displayed with a monochrome treatment.</p></div></details>
     </div></footer>
   </div>;

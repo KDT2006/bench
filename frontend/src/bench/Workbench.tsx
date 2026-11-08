@@ -1,12 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
-import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import type { FileName, Lane, Machine, Workspace } from "../api/types";
 import { getExamples } from "../api/client";
 import { download } from "../model/download";
@@ -14,7 +13,7 @@ import { LaneBadge } from "../chart/config";
 import { generateLane, isStale, runBench } from "../model/actions";
 import { freshWorkspace, replaceWorkspace, useBench, validWorkspace } from "../model/state";
 import { buildErrorLine, harness, laneColors, laneVar, languages } from "../model/format";
-import { starterLane, starterWorkspace } from "../model/examples";
+import { starterLane } from "../model/examples";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
 import LaneOptions from "./LaneOptions";
@@ -311,14 +310,6 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
       download(`${basename}.zip`, new Blob([new Uint8Array(archive)], { type: "application/zip" }));
     } catch { useBench.getState().notify({ text: "Couldn’t export the files. Try again.", error: true }); }
   }
-  function loadLiveExample() {
-    if (!machine) return;
-    flushEditors();
-    const next = starterWorkspace(machine.arch);
-    next.title = "Array sum";
-    next.lanes[0].language = machine.languages?.[0] ?? "go";
-    replaceWorkspace(next);
-  }
   function jumpTo(lane: Lane, line: number) {
     if (!workspace.lanes.some((entry) => entry.id === lane.id)) return;
     select(lane, harness(lane.language));
@@ -362,13 +353,12 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
         const value: unknown = JSON.parse(await e.dataTransfer.files[0].text());
         if (!validWorkspace(value)) throw new Error();
         replaceWorkspace(freshWorkspace(value));
-      } catch { useBench.getState().notify({ text: "Drop a Benchscope workspace JSON file.", error: true }); }
+      } catch { useBench.getState().notify({ text: "Drop a Bench.it workspace JSON file.", error: true }); }
     } : undefined}>
     <h1 className="sr-only">Workbench</h1>
     {mobile ? <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div> : <div className="bench-banner">
       <span>{machine ? `Live execution: ${machines?.map((target) => `${target.languages?.map((language) => languages[language]).join(", ")} on ${target.id}`).join(" · ")}` : "Waiting for the execution server."}</span>
       <div className="bench-tools">
-        <button className="control" type="button" onClick={loadLiveExample} disabled={!machine}>Load live Array sum</button>
         <label className="control link-toggle"><input type="checkbox" checked={workspace.linkDsl} onChange={toggleLink} /><LinkSimpleIcon size={15} aria-hidden="true" /> Linked DSL</label>
         <details className="action-menu"><summary className="control">Export bench</summary><div className="menu-panel">
           <button type="button" onClick={() => void exportWorkspace(false)}>Workspace JSON</button>
@@ -425,7 +415,6 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
     {addOpen && <Overlay title="Add lane" onClose={() => setAddOpen(false)}><div className="overlay-body add-choices">
       <button type="button" className="control primary" onClick={() => add()}><PlusIcon size={16} aria-hidden="true" /> New lane</button>
       {workspace.lanes.map((lane) => <button type="button" className="control" key={lane.id} onClick={() => add(lane)}>Duplicate lane {lane.label}</button>)}
-      <Link className="control" to="/examples">From examples <ArrowUpRightIcon size={14} aria-hidden="true" /></Link>
     </div></Overlay>}
     {confirm && <Overlay title={confirm.title} onClose={() => setConfirm(null)}><div className="overlay-body">
       <p>{confirm.text}</p><div className="dialog-actions"><button type="button" className="control" onClick={() => setConfirm(null)}>{confirm.cancel ?? "Cancel"}</button>

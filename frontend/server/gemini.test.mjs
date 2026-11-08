@@ -7,7 +7,9 @@ import { createServer } from "vite";
 let server;
 const load = (path) => server.ssrLoadModule(path);
 before(async () => {
-  server = await createServer({ configFile: false, root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "silent", server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
+  // A different Vite config invalidates its dependency cache. Keep this loader
+  // separate so tests cannot delete modules used by a running dev server.
+  server = await createServer({ configFile: false, root: fileURLToPath(new URL("..", import.meta.url)), cacheDir: fileURLToPath(new URL("../node_modules/.vite-tests", import.meta.url)), logLevel: "silent", server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
 });
 after(async () => { await server?.close(); });
 

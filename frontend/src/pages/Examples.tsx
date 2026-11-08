@@ -22,7 +22,7 @@ export default function Examples() {
     setParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next; }, { replace: true });
   }
   return <div className="page index-page">
-    <header className="page-heading"><h1>Examples</h1><p>Start with a benchmark you can open, change, and run in the workbench.</p></header>
+    <header className="page-heading"><h2>Examples</h2><p>Start with a benchmark you can open, change, and run in the workbench.</p></header>
     <div className="filter-bar"><div className="segmented" aria-label="Category">
       {["", ...categories].map((value) => <button key={value} className="control" type="button" aria-pressed={value === category} onClick={() => update("category", value)}>{value || "All examples"}</button>)}
     </div><div className="inline-controls">

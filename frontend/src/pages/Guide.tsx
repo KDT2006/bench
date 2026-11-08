@@ -8,7 +8,7 @@ import { starterWorkspace } from "../model/examples";
 
 const sections = [
   { id: "quick-start", title: "Quick start", copy: "Open the array sum example, read its sweep, then press Run. Open full results to compare the lanes as the input grows." },
-  { id: "how-it-works", title: "How it works", copy: "Benchscope parses the sweep and has Gemini translate each scaffold lane into a harness. It then sends one request per sweep combination to the execution server, which builds and times the harness and returns the measurements. Results stay in the current tab." },
+  { id: "how-it-works", title: "How it works", copy: "Bench.it parses the sweep and has Gemini translate each scaffold lane into a harness. It then sends one request per sweep combination to the execution server, which builds and times the harness and returns the measurements. Results stay in the current tab." },
   { id: "directives", title: "Directives", copy: "Each directive starts a section. The runner reads #sweep itself. Code generation receives the remaining sections." },
   { id: "language", title: "Language constructs", copy: "Assign with name = expression. Use for i in 0..N: to iterate over indices and if condition: to branch. Indent the body when it spans multiple lines. Use // for comments." },
   { id: "data-structures", title: "Data structures", copy: "Read or write an array at arr[index] and a map at table[key]. Make data in #setup and keep the operation under test in #bench." },
@@ -71,7 +71,7 @@ export default function Guide() {
     return () => window.removeEventListener("keydown", keyboard);
   }, []);
   return <div className="page index-page guide-page">
-    <div className="page-heading"><h1>Guide</h1><p>Write a benchmark, understand the runner, and read the results.</p></div>
+    <div className="page-heading"><h2>Guide</h2><p>Write a benchmark, understand the runner, and read the results.</p></div>
     <div className="guide-search"><label className="sr-only" htmlFor="guide-search">Search guide</label><input ref={input} id="guide-search" type="search" placeholder="Search the guide…" value={q}
       onChange={(e) => setParams(e.target.value ? { q: e.target.value } : {}, { replace: true })} /><kbd>/</kbd></div>
     <div className="guide-layout">

@@ -1,6 +1,6 @@
-# Benchscope frontend
+# Bench.it frontend
 
-The home page opens the workbench through **Go**. The **Welcome** page contains the introduction and a synthetic sample chart. The workbench supports editing and running at viewport widths of 768 px or more; smaller screens can view code and results.
+The home page opens the workbench through **Go**. The **Docs** page has **Examples** (`/docs/examples`) and **Guide** (`/docs/guide`) tabs. The workbench is dedicated to editing, executing and inspecting benchmarks. The workbench supports editing and running at viewport widths of 768 px or more; smaller screens can view code and results.
 
 ## Local setup
 
@@ -40,7 +40,7 @@ Keep the Gemini key server-side; never prefix it with `VITE_`. Restart Vite afte
 
 ## Write, generate, run
 
-Open `/bench`, choose **Load live Array sum**, and press **Run**. That action translates any stale code, submits each lane/input combination sequentially, and displays completed results. To translate without executing, click **Translate** in the lane toolbar. Translation works independently of the configured execution servers; a lane marked **Translation only** can be generated but needs its own backend to run. Code generation requires a configured Gemini key. The default backend is Go-only. The Python profiler library alone is not an HTTP execution server.
+Open **Docs → Examples**, choose **Array sum** to open it in the workbench, and press **Run**. That action translates any stale code, submits each lane/input combination sequentially, and displays completed results. To translate without executing, click **Translate** in the lane toolbar. Translation works independently of the configured execution servers; a lane marked **Translation only** can be generated but needs its own backend to run. Code generation requires a configured Gemini key. The proxy enables Go by default; start the Python execution server and configure its URL to enable Python lanes.
 
 The browser posts to `/api/scaffold`; the dedicated Vite server handler calls Gemini's `generateContent` API and returns the translated sections to the harness tab. The key stays on the server, so the Gemini request appears in server traffic rather than as a direct browser request. Missing configuration returns an actionable error instead of sample code. Vite loads environment settings from the frontend directory regardless of the shell's working directory.
 
