@@ -5,11 +5,24 @@ import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { sampleRun } from "../model/examples";
 import { bytes, num } from "../model/format";
+import { API_BASE_URL } from "../api/config";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const LandingSequence = lazy(() => import("./LandingSequence"));
 const fixture = sampleRun.workspaceSnapshot;
 const machine = sampleRun.machine;
+
+function ServerStatus() {
+  const [online, setOnline] = useState(false);
+  useEffect(() => {
+    const ping = () => fetch(`${API_BASE_URL}/discover/health`).then((res) => setOnline(res.ok), () => setOnline(false));
+    ping();
+    const timer = setInterval(ping, 10_000);
+    return () => clearInterval(timer);
+  }, []);
+  const label = online ? "Server online" : "Server offline";
+  return <span className="server-status" role="status" title={label} aria-label={label} data-online={online} />;
+}
 
 function BenchLink() {
   return <Link className="control primary landing-button" to="/bench" onMouseEnter={() => void import("../bench/Workbench")} onFocus={() => void import("../bench/Workbench")}>Open the workbench <ArrowRightIcon size={16} aria-hidden="true" /></Link>;
@@ -96,7 +109,7 @@ export default function Landing() {
     </section>
     <section className="landing-close"><div className="page"><h2>Pick an example and press run.</h2><BenchLink /></div></section>
     <footer className="landing-footer"><div className="page">
-      <Link className="brand" to="/">Benchscope</Link><nav aria-label="Footer"><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link><Link to="/benches">Library</Link></nav>
+      <Link className="brand" to="/">Benchscope</Link><ServerStatus /><nav aria-label="Footer"><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link><Link to="/benches">Library</Link></nav>
       <details><summary>Photo credits</summary><div><a href="https://commons.wikimedia.org/wiki/File:Circuit_board_Closeup_(24884297897).jpg">Circuit board, Jonathan Cutrer (CC BY 2.0)</a><a href="https://commons.wikimedia.org/wiki/File:RAM-chips.jpg">RAM chips, Hannes Grobe (CC BY-SA 4.0)</a><p>Displayed with a monochrome treatment.</p></div></details>
     </div></footer>
   </div>;

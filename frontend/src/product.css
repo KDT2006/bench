@@ -271,6 +271,8 @@
   .landing-footer details { margin-left: 8px; }
   .landing-footer details a { display: block; text-decoration: underline; }
   .landing-footer summary { cursor: pointer; }
+  .server-status { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; align-self: center; }
+  .server-status[data-online="true"] { background: #16a34a; }
 
   /* Reference and library */
   .filter-bar { display: grid; gap: 10px; padding-block: 16px; margin-block: 12px; border-bottom: 1px solid var(--hairline); }

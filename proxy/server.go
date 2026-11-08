@@ -239,6 +239,7 @@ func (s *server) handler(prefix string) http.Handler {
 	mux.HandleFunc("DELETE /benches/{id}", s.deleteBench)
 	mux.HandleFunc("POST /share", s.createShare)
 	mux.HandleFunc("GET /share/{id}", s.getShare)
+	mux.HandleFunc("GET /discover/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	// Agent (Part B)
 	mux.HandleFunc("POST /agent/register", s.agentOnly(s.register))
 	mux.HandleFunc("POST /agent/poll", s.agentOnly(s.poll))
