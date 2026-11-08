@@ -1,26 +1,23 @@
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
-import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import type { FileName, Lane, Machine, Workspace } from "../api/types";
 import { getExamples } from "../api/client";
 import { download } from "../model/download";
-import { USE_MOCK_API } from "../api/config";
 import { LaneBadge } from "../chart/config";
 import { generateLane, isStale, runBench } from "../model/actions";
 import { freshWorkspace, replaceWorkspace, useBench, validWorkspace } from "../model/state";
-import { harness, laneColors, laneVar, languages } from "../model/format";
-import { starterWorkspace } from "../model/examples";
-import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "../model/scaffoldLimits";
+import { buildErrorLine, harness, laneColors, laneVar, languages } from "../model/format";
+import { starterLane } from "../model/examples";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
 import LaneOptions from "./LaneOptions";
+import CompilerOptions from "./CompilerOptions";
 import RunPanel from "./RunPanel";
 
 const Editor = lazy(() => import("./Editor"));
@@ -31,36 +28,61 @@ function useMedia(query: MediaQueryList) {
 }
 export function useReadOnlyWidth() { return useMedia(small); }
 const laneLabels = ["A", "B", "C", "D"] as const;
-const safeFiles = (lane: Lane): FileName[] => ["benchmark.perf", harness(lane.language), ...(lane.files["kernel.S"] !== undefined ? ["kernel.S" as const] : [])];
-const sizeLimit = 1024 * 1024;
+const laneFiles = (lane: Lane): FileName[] => ["benchmark.perf", harness(lane.language)];
 
 export function EditorSkeleton({ text = "Loading editor…" }: { text?: string }) {
   return <div className="editor-skeleton loading-state" role="status"><p>{text}</p><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>;
 }
 
-function newLane(workspace: Workspace, from?: Lane, first?: Machine): Lane | undefined {
+function newLane(workspace: Workspace, from?: Lane, machine?: Machine): Lane | undefined {
   const label = laneLabels.find((entry) => workspace.lanes.every((lane) => lane.label !== entry));
   if (!label) return;
-  const source = structuredClone(from ?? starterWorkspace().lanes[0]);
-  const language = from?.language ?? (USE_MOCK_API && workspace.lanes.length === 1 ? "python" : first?.languages?.[0] ?? "go");
+  const source = from ? structuredClone(from) : starterLane(machine?.arch, machine?.languages?.[0]);
   return {
-    ...source, id: crypto.randomUUID(), label, color: laneColors[label], name: undefined, language,
-    arch: from?.arch ?? first?.arch ?? source.arch,
+    ...source, id: crypto.randomUUID(), label, color: laneColors[label], name: undefined,
     files: from ? source.files : { "benchmark.perf": workspace.linkDsl
       ? workspace.lanes.find((lane) => lane.mode === "scaffold")?.files["benchmark.perf"] ?? source.files["benchmark.perf"]
       : "#imports\n\n#globals\n\n#sweep\nN: [1024,4096]\n\n#setup\n\n#bench\nsink(N)\n\n#cleanup\n" },
-    build: from ? source.build : { ...source.build, toolchainVersion: first?.toolchains[language] ?? (language === "go" ? "go1.23" : "cpython3.13") },
   };
+}
+
+/** Line-by-line diff (longest common subsequence). */
+function lineDiff(before: string, after: string) {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  const common = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) {
+    common[i][j] = a[i] === b[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
+  }
+  const lines: { kind: " " | "+" | "-"; text: string }[] = [];
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { lines.push({ kind: " ", text: a[i] }); i++; j++; }
+    else if (j < b.length && (i === a.length || common[i][j + 1] >= common[i + 1][j])) lines.push({ kind: "+", text: b[j++] });
+    else lines.push({ kind: "-", text: a[i++] });
+  }
+  return lines;
+}
+
+function CodeDiff({ before, after }: { before: string; after: string }) {
+  const lines = useMemo(() => lineDiff(before, after), [before, after]);
+  const added = lines.filter((line) => line.kind === "+").length;
+  const removed = lines.filter((line) => line.kind === "-").length;
+  return <div className="overlay-body code-diff">
+    <p className="help-text">{added} {added === 1 ? "line" : "lines"} added · {removed} removed</p>
+    <pre>{lines.map((line, index) => <span key={index} className={line.kind === "+" ? "diff-add" : line.kind === "-" ? "diff-remove" : undefined}>
+      <span className="diff-marker" aria-label={line.kind === "+" ? "Added" : line.kind === "-" ? "Removed" : undefined}>{line.kind}</span>{line.text || " "}</span>)}</pre>
+  </div>;
 }
 
 type Confirm = { title: string; text: string; action: string; cancel?: string; run: () => void };
 interface LaneProps {
-  lane: Lane; file: FileName; linked: boolean; editable: boolean; machine?: Machine; machines?: Machine[];
+  lane: Lane; file: FileName; linked: boolean; editable: boolean; machine?: Machine;
   setFile: (file: FileName) => void; setConfirm: (confirm: Confirm) => void; add: (lane?: Lane) => void;
   canRemove: boolean; canAdd: boolean; jump?: { line: number; serial: number }; onFocus: () => void;
 }
 
-function LanePane({ lane, file, linked, editable, machine, machines, setFile, setConfirm, add, canRemove, canAdd, jump, onFocus }: LaneProps) {
+function LanePane({ lane, file, linked, editable, machine, setFile, setConfirm, add, canRemove, canAdd, jump, onFocus }: LaneProps) {
   const editFile = useBench((s) => s.editFile);
   const change = useBench((s) => s.changeLane);
   const generating = useBench((s) => s.generating.includes(lane.id));
@@ -74,18 +96,26 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
   const [diff, setDiff] = useState<{ before: string; after: string } | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const menuWrap = useRef<HTMLDivElement>(null);
   const oldCode = useRef<string | undefined>(undefined);
   const harnessName = harness(lane.language);
   const harnessText = lane.files[harnessName];
-  const dslLength = scaffoldLength(lane.files["benchmark.perf"] ?? "");
-  const dslTooLong = dslLength > MAX_SCAFFOLD_CHARACTERS;
   const compiling = events?.findLast(({ event }) => event.type === "build_done" && event.laneId === lane.id)?.event;
   const issue = compiling?.type === "build_done" && !compiling.ok ? compiling.log : undefined;
-  const issueLine = issue ? Number(/(?:line\s+|:)(\d+)/i.exec(issue)?.[1]) : 0;
+  const issueLine = issue ? buildErrorLine(issue) : undefined;
+  const failed = events?.some(({ event }) => event.type === "error" && event.laneId === lane.id);
+  const translationOnly = Boolean(machine && !machine.languages?.includes(lane.language));
   const buildError = file === harnessName && issue && issueLine && snapshot?.files[file] === lane.files[file] ? { line: issueLine, message: issue } : undefined;
   const total = events?.findLast(({ event }) => event.type === "perm_start" && event.laneId === lane.id)?.event;
   const loadingHarness = generating && file === harnessName;
   const readOnly = !editable || (file === "benchmark.perf" && lane.mode === "ejected") || (file === harnessName && lane.mode === "scaffold");
+
+  useEffect(() => {
+    if (!menu) return;
+    const outside = (event: PointerEvent) => { if (!menuWrap.current?.contains(event.target as Node)) setMenu(false); };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [menu]);
 
   useEffect(() => {
     if (harnessText !== oldCode.current && oldCode.current !== undefined && harnessText !== undefined) setDiff({ before: oldCode.current, after: harnessText });
@@ -99,17 +129,11 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
       if (entry.mode === "ejected") delete files[harness(entry.language)];
       delete files[harness(language)];
       return { ...entry, language, scaffold: undefined, files, build: {
-        ...entry.build, flags: [], env: {}, toolchainVersion: machine?.toolchains[language] ?? "",
+        ...entry.build, flags: [], compilerOptions: "", env: {}, toolchainVersion: "",
       } };
     });
     if (lane.mode === "ejected" && harnessText) setConfirm({ title: "Change language?", text: "This discards the hand-written harness for this lane.", action: "Change language", run: update });
     else update();
-  }
-
-  function updateArch(arch: Lane["arch"]) {
-    const run = () => change(lane.id, (entry) => ({ ...entry, arch, scaffold: undefined }));
-    if (lane.files["kernel.S"]) setConfirm({ title: "Change architecture?", text: "Assembly syntax is architecture-specific. Update kernel.S for the new architecture.", action: "Change architecture", run });
-    else run();
   }
 
   function editMode() {
@@ -137,38 +161,35 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
     }
   }
 
-  const status = generating ? "Generating…" : issue ? "Build failed" : isStale(lane) ? (lane.scaffold ? "DSL changed" : "Needs generation")
-    : lane.mode === "ejected" ? "Edited" : lane.scaffold?.cached ? "Cached" : "Generated";
+  const status = generating ? "Generating…" : issue ? "Build failed" : failed ? "Failed" : isStale(lane) ? (lane.scaffold ? "DSL changed" : "Needs generation")
+    : lane.mode === "ejected" ? "Edited" : "Generated";
+  const translate = () => {
+    flushEditors();
+    setFile(harnessName);
+    void generateLane(useBench.getState().workspace.lanes.find((item) => item.id === lane.id)!);
+  };
   return <article className="lane" aria-label={`Lane ${lane.label}`} onFocus={onFocus} style={{ "--channel": laneVar(lane.label) } as CSSProperties}>
     <div className="lane-toolbar">
       <LaneBadge lane={lane} />
       {editable ? <>
         <input aria-label={`Lane ${lane.label} name`} title={lane.name || `Lane ${lane.label}`} className="lane-name" placeholder={`Lane ${lane.label}`} value={lane.name ?? ""} onChange={(e) => change(lane.id, (item) => ({ ...item, name: e.target.value }))} />
         <select aria-label={`Lane ${lane.label} language`} value={lane.language} onChange={(e) => updateLanguage(e.target.value as Lane["language"])}>
-          {Object.entries(languages).map(([value, label]) => <option value={value} key={value}>{label}{!USE_MOCK_API && !machine?.languages?.includes(value as Lane["language"]) ? " (translation only)" : ""}</option>)}
+          {Object.entries(languages).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
         </select>
-        <select aria-label={`Lane ${lane.label} architecture`} value={lane.arch} onChange={(e) => updateArch(e.target.value as Lane["arch"])}>
-          {(["x86_64", "arm64"] as const).map((arch) => <option key={arch} disabled={arch !== lane.arch && !machines?.some((item) => item.arch === arch && item.status !== "offline")}>{arch}</option>)}
-        </select>
-      </> : <><span className="lane-name view-only">{lane.name || `Lane ${lane.label}`}</span><span>{languages[lane.language]}</span><code>{lane.arch}</code></>}
+      </> : <><span className="lane-name view-only">{lane.name || `Lane ${lane.label}`}</span><span>{languages[lane.language]}</span></>}
+      <code className="lane-arch" title="The server's architecture">{lane.arch}</code>
+      {translationOnly && <span className="chip" title={`The server has no ${languages[lane.language]} executor. You can translate this lane, but not run it.`}>Translation only</span>}
       <span className="chip mode-chip" title={lane.mode === "scaffold" ? "Edit the DSL and generate a harness." : "Edit the harness directly."}>{lane.mode === "scaffold" ? "Scaffold" : "Code"}</span>
       {editable && lane.mode === "scaffold" && <button className="control" type="button"
-        disabled={generating || preparingRun || dslTooLong} title={`Translate pseudocode to ${languages[lane.language]}`}
-        onClick={() => {
-          flushEditors();
-          setFile(harnessName);
-          void generateLane(useBench.getState().workspace.lanes.find((item) => item.id === lane.id)!);
-        }}>{generating ? "Translating…" : `Translate to ${languages[lane.language]}`}</button>}
-      {editable && <div className="lane-menu-wrap">
+        disabled={generating || preparingRun} title={`Translate pseudocode to ${languages[lane.language]} (Ctrl/⌘ Shift G)`}
+        onClick={translate}>{generating ? "Translating…" : "Translate"}</button>}
+      {editable && <div className="lane-menu-wrap" ref={menuWrap}>
         <button className="control icon-control" type="button" aria-label={`Lane ${lane.label} actions`} title={`Lane ${lane.label} actions`} aria-expanded={menu} ref={menuButton} onClick={() => setMenu(!menu)}><DotsThreeIcon size={20} weight="bold" aria-hidden="true" /></button>
-        {menu && <div className="lane-menu" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget) && e.relatedTarget !== menuButton.current) setMenu(false); }}
+        {menu && <div className="lane-menu" onBlur={(e) => { if (e.relatedTarget && !menuWrap.current?.contains(e.relatedTarget)) setMenu(false); }}
           onKeyDown={(e) => { if (e.key === "Escape") { setMenu(false); menuButton.current?.focus(); } }}>
-          {lane.mode === "scaffold" && <button type="button" disabled={generating} onClick={() => { setMenu(false); flushEditors(); setFile(harnessName); void generateLane(useBench.getState().workspace.lanes.find((item) => item.id === lane.id)!); }}>Generate code</button>}
-          <button type="button" onClick={editMode}>{lane.mode === "scaffold" ? "Edit as code" : "Switch back to scaffold"}</button>
-          <button type="button" onClick={() => { setMenu(false); setOptions(true); }}>Options</button>
           <button type="button" disabled={!canAdd} onClick={() => { setMenu(false); add(lane); }}>Duplicate lane</button>
           <button type="button" onClick={() => { setMenu(false); setConfirm({ title: `Reset lane ${lane.label}?`, text: "This replaces this lane’s settings and files.", action: "Reset lane", run: () => {
-            const starter = starterWorkspace().lanes[0];
+            const starter = starterLane(lane.arch, machine?.languages?.[0]);
             const dsl = linked ? lane.files["benchmark.perf"] : starter.files["benchmark.perf"];
             change(lane.id, (entry) => ({ ...starter, id: entry.id, label: entry.label, color: entry.color, files: { "benchmark.perf": dsl } }));
             setFile("benchmark.perf");
@@ -178,27 +199,20 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
       </div>}
     </div>
     {active && ["queued", "building", "running"].includes(active) && snapshot && <div className="lane-progress"><i style={{ transform: `scaleX(${total?.type === "perm_start" ? progress / total.total : 0})` }} /></div>}
+    <CompilerOptions lane={lane} readOnly={!editable || preparingRun} />
     <div className="file-strip">
-      <div className="tab-strip" role="tablist" aria-label={`Lane ${lane.label} files`}>{safeFiles(lane).map((name) =>
+      <div className="tab-strip" role="tablist" aria-label={`Lane ${lane.label} files`}>{laneFiles(lane).map((name) =>
         <button type="button" role="tab" aria-selected={file === name} key={name} title={name} onClick={() => { flushEditors(); setFile(name); }}>
           {name}{snapshot && snapshot.files[name] !== lane.files[name] && <span className="file-dirty" aria-label="Modified since run">•</span>}
           {issue && name === harnessName && <span className="error-text" aria-label="Build failed">●</span>}
         </button>)}
-        {editable && lane.files["kernel.S"] === undefined && <button type="button" title="Add kernel.S" onClick={() => { editFile(lane.id, "kernel.S", ""); setFile("kernel.S"); }}>+ asm</button>}
       </div>
-      <span className={`file-state${issue ? " error-text" : ""}`} title={status}>{status}</span>
+      <span className={`file-state${issue || failed ? " error-text" : ""}`} title={status}>{status}</span>
     </div>
-    {file === "benchmark.perf" && lane.mode === "scaffold" && editable && (
-      <div className={`editor-note${dslTooLong ? " error-text" : ""}`}>
-        <span>{dslLength}/{MAX_SCAFFOLD_CHARACTERS} characters for code generation</span>
-        {dslTooLong && <span role="status">{scaffoldLimitMessage}</span>}
-      </div>
-    )}
     {file === "benchmark.perf" && linked && <div className="editor-note"><LinkSimpleIcon size={14} aria-hidden="true" /> Linked benchmark.perf</div>}
     {file === "benchmark.perf" && lane.mode === "ejected" && <div className="editor-note">DSL reference. Edit sweep parameters in the Sweep tab.</div>}
     {file === harnessName && lane.mode === "scaffold" && !loadingHarness && <div className="editor-note">
-      {harnessText ? "Generated from benchmark.perf. Read-only until you edit as code." : "Generate code to view the harness."}
-      {editable && <button type="button" className="text-action" onClick={() => { flushEditors(); void generateLane(useBench.getState().workspace.lanes.find((item) => item.id === lane.id)!); }}>Generate code</button>}
+      {harnessText ? "Generated from benchmark.perf. Read-only until you edit as code." : "Translate to view the harness."}
     </div>}
     {lane.scaffold?.warnings.length ? <details className="code-warning"><summary>{lane.scaffold.warnings.length === 1 ? "1 note from code generation" : `${lane.scaffold.warnings.length} notes from code generation`}</summary>
       <ul>{lane.scaffold.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details> : null}
@@ -212,24 +226,20 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
       <button className="text-action" type="button" onClick={editMode}><CodeIcon size={14} aria-hidden="true" /> {lane.mode === "scaffold" ? "Edit as code" : "Switch back to scaffold"}</button>
       {diff && file === harnessName && <button className="text-action" type="button" onClick={() => setDiffOpen(true)}>Compare generated code</button>}
     </div>}
-    {options && <LaneOptions lane={lane} machine={machine} close={() => setOptions(false)} />}
-    {diffOpen && diff && <Overlay title="Generated code changes" onClose={() => setDiffOpen(false)}><div className="overlay-body code-diff">
-      <div><h3>Previous</h3><pre>{diff.before}</pre></div><div><h3>Current</h3><pre>{diff.after}</pre></div>
-    </div></Overlay>}
+    {options && <LaneOptions lane={lane} close={() => setOptions(false)} />}
+    {diffOpen && diff && <Overlay title="Generated code changes" onClose={() => setDiffOpen(false)}><CodeDiff before={diff.before} after={diff.after} /></Overlay>}
   </article>;
 }
 
-export function WorkspaceView({ workspace, machines, shared = false, onFork, runControl }: { workspace: Workspace; machines?: Machine[]; shared?: boolean; onFork?: () => void; runControl?: ReactNode }) {
+function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines?: Machine[] }) {
   const mobile = useReadOnlyWidth();
   const tabs = useMedia(tabbed);
   const [params, setParams] = useSearchParams();
   const selectedLane = workspace.lanes.find((lane) => lane.label === params.get("lane")) ?? workspace.lanes[0];
-  const editable = !shared && !mobile;
-  const onlineMachine = machines?.find((item) => item.status !== "offline" && item.languages?.includes("go"));
-  const machine = machines?.find((item) => item.arch === selectedLane.arch) ?? machines?.[0];
+  const editable = !mobile;
+  const machine = machines?.[0];
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [help, setHelp] = useState(() => { try { return sessionStorage.getItem("benchscope-start-hidden") !== "yes"; } catch { return true; } });
   const [jump, setJump] = useState<{ id: string; line: number; serial: number }>();
   const layout = useBench((s) => s.layout);
   const setLayout = useBench((s) => s.setLayout);
@@ -238,6 +248,17 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
   const root = useRef<HTMLDivElement>(null);
   const grid = !tabs && workspace.lanes.length >= 3 && layout.grid;
   const shown = tabs ? [selectedLane] : workspace.lanes;
+
+  // Each lane follows the architecture of its language's execution target.
+  useEffect(() => {
+    if (!machines?.length) return;
+    const current = useBench.getState().workspace;
+    const lanes = current.lanes.map((lane) => {
+      const target = machines.find((target) => target.languages?.includes(lane.language));
+      return target && target.arch !== lane.arch ? { ...lane, arch: target.arch } : lane;
+    });
+    if (lanes.some((lane, index) => lane !== current.lanes[index])) useBench.setState({ workspace: { ...current, lanes } });
+  }, [machines, workspace]);
 
   function select(lane: Lane, file?: FileName) {
     setParams((current) => {
@@ -248,7 +269,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     }, { replace: true });
   }
   function fileFor(lane: Lane) {
-    const files = safeFiles(lane);
+    const files = laneFiles(lane);
     return files.find((file) => file === params.get(`file${lane.label}`)) ?? files[0];
   }
   function add(from?: Lane) {
@@ -283,22 +304,13 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     }
     try {
       const { strToU8, zipSync } = await import("fflate");
-      const files = Object.fromEntries(snapshot.lanes.flatMap((lane) => safeFiles(lane).flatMap((name) => {
+      const files = Object.fromEntries(snapshot.lanes.flatMap((lane) => laneFiles(lane).flatMap((name) => {
         const contents = lane.files[name];
         return contents === undefined ? [] : [[`lane-${lane.label}/${name}`, strToU8(contents)] as const];
       })));
       const archive = zipSync(files);
       download(`${basename}.zip`, new Blob([new Uint8Array(archive)], { type: "application/zip" }));
     } catch { useBench.getState().notify({ text: "Couldn’t export the files. Try again.", error: true }); }
-  }
-  function loadLiveExample() {
-    if (!onlineMachine) return;
-    const { arch } = onlineMachine;
-    flushEditors();
-    const next = freshWorkspace(starterWorkspace());
-    next.title = "Array sum";
-    next.lanes = next.lanes.map((lane) => ({ ...lane, arch, build: { toolchainVersion: "Server default", flags: [], env: {} } }));
-    replaceWorkspace(next);
   }
   function jumpTo(lane: Lane, line: number) {
     if (!workspace.lanes.some((entry) => entry.id === lane.id)) return;
@@ -307,22 +319,26 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
   }
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if ((!e.metaKey && !e.ctrlKey) || document.querySelector("dialog[open]")) return;
+      if (document.querySelector("dialog[open]")) return;
+      // Alt+1–4: Ctrl/⌘+1–8 are reserved by browsers for tab switching. Match the physical key; Option+digit types a symbol on macOS.
+      if (e.altKey && !e.ctrlKey && !e.metaKey && /^Digit[1-4]$/.test(e.code)) {
+        const lane = workspace.lanes[Number(e.code.slice(5)) - 1];
+        if (!lane) return;
+        e.preventDefault(); select(lane);
+        requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(`[aria-label="Lane ${lane.label}"] [role="tab"][aria-selected="true"]`)?.focus());
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey) return;
       const character = e.key.toLowerCase();
-      if (character === "j" && !shared) { e.preventDefault(); setLayout({ collapsed: !useBench.getState().layout.collapsed }); }
+      if (character === "j") { e.preventDefault(); setLayout({ collapsed: !useBench.getState().layout.collapsed }); }
       if (e.shiftKey && character === "g" && editable && selectedLane.mode === "scaffold") {
         e.preventDefault(); flushEditors(); select(selectedLane, harness(selectedLane.language));
         const lane = useBench.getState().workspace.lanes.find((item) => item.id === selectedLane.id);
         if (lane) void generateLane(lane);
       }
-      const lane = workspace.lanes[Number(character) - 1];
-      if (lane && /^[1-4]$/.test(character)) {
-        e.preventDefault(); select(lane);
-        requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(`[aria-label="Lane ${lane.label}"] [role="tab"][aria-selected="true"]`)?.focus());
-      }
       if (e.altKey && ["ArrowLeft", "ArrowRight"].includes(e.key)) {
         e.preventDefault(); flushEditors();
-        const files = safeFiles(selectedLane);
+        const files = laneFiles(selectedLane);
         select(selectedLane, files[(files.indexOf(fileFor(selectedLane)) + (e.key === "ArrowLeft" ? -1 : 1) + files.length) % files.length]);
       }
     };
@@ -335,40 +351,23 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     onDrop={editable ? async (e) => {
       if (!e.dataTransfer.files.length) return;
       e.preventDefault(); flushEditors();
-      const file = e.dataTransfer.files[0];
       try {
-        if (file.size > sizeLimit) throw new Error();
-        const value: unknown = JSON.parse(await file.text());
+        const value: unknown = JSON.parse(await e.dataTransfer.files[0].text());
         if (!validWorkspace(value)) throw new Error();
         replaceWorkspace(freshWorkspace(value));
-      } catch { useBench.getState().notify({ text: "Drop a Benchscope workspace JSON file under 1 MiB.", error: true }); }
+      } catch { useBench.getState().notify({ text: "Drop a Bench.it workspace JSON file.", error: true }); }
     } : undefined}>
-    <div className="bench-heading">
-      <div><h1>{shared ? workspace.title : "Workbench"}</h1><p>{USE_MOCK_API ? "Mock machine · Array-sum fixture replay" : "Write, configure, and run a benchmark."}</p></div>
-      {!shared && <div className="bench-tools">
-        {editable && <label className="control link-toggle"><input type="checkbox" checked={workspace.linkDsl} onChange={toggleLink} /><LinkSimpleIcon size={15} aria-hidden="true" /> Linked DSL</label>}
-        {editable && <details className="action-menu"><summary className="control">Export bench</summary><div className="menu-panel">
+    <h1 className="sr-only">Workbench</h1>
+    {mobile ? <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div> : <div className="bench-banner">
+      <span>{machine ? `Live execution: ${machines?.map((target) => `${target.languages?.map((language) => languages[language]).join(", ")} on ${target.id}`).join(" · ")}` : "Waiting for the execution server."}</span>
+      <div className="bench-tools">
+        <label className="control link-toggle"><input type="checkbox" checked={workspace.linkDsl} onChange={toggleLink} /><LinkSimpleIcon size={15} aria-hidden="true" /> Linked DSL</label>
+        <details className="action-menu"><summary className="control">Export bench</summary><div className="menu-panel">
           <button type="button" onClick={() => void exportWorkspace(false)}>Workspace JSON</button>
           <button type="button" onClick={() => void exportWorkspace(true)}>Raw files ZIP</button>
-        </div></details>}
-        {editable && workspace.lanes.length >= 3 && <button type="button" className="control" aria-pressed={layout.grid} onClick={() => setLayout({ grid: !layout.grid })}>Grid</button>}
-        {editable && <button className="control" type="button" onClick={() => setAddOpen(true)} disabled={workspace.lanes.length >= 4} title={workspace.lanes.length >= 4 ? "You can use up to four lanes" : "Add lane"}><PlusIcon size={16} aria-hidden="true" /> Add lane</button>}
-      </div>}
-    </div>
-    {shared && <div className="bench-banner"><span>You’re viewing a shared bench. Fork it to edit and run.</span><button className="control primary" type="button" onClick={onFork}>Fork</button></div>}
-    {!shared && mobile && <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div>}
-    {!shared && editable && !USE_MOCK_API && <div className="bench-banner">
-      <span>{onlineMachine ? "Live Go execution · Generated code runs on the configured server" : "Waiting for a configured Go executor."}</span>
-      <div className="inline-controls">
-        <button className="control" type="button" onClick={loadLiveExample} disabled={!onlineMachine}>Load live Array sum</button>
-        {runControl}
-      </div>
-    </div>}
-    {!shared && editable && USE_MOCK_API && help && <div className="bench-banner">
-      <span>New here? Start from an <Link to="/examples">example</Link>.</span>
-      <div className="inline-controls">
-        {runControl}
-        <button className="control icon-control" type="button" title="Dismiss tip" aria-label="Dismiss tip" onClick={() => { try { sessionStorage.setItem("benchscope-start-hidden", "yes"); } catch { /* storage can be disabled */ } setHelp(false); }}><XIcon size={16} aria-hidden="true" /></button>
+        </div></details>
+        {workspace.lanes.length >= 3 && <button type="button" className="control" aria-pressed={layout.grid} onClick={() => setLayout({ grid: !layout.grid })}>Grid</button>}
+        <button className="control" type="button" onClick={() => setAddOpen(true)} disabled={workspace.lanes.length >= 4} title={workspace.lanes.length >= 4 ? "You can use up to four lanes" : "Add lane"}><PlusIcon size={16} aria-hidden="true" /> Add lane</button>
       </div>
     </div>}
     {tabs && shown.length > 0 && workspace.lanes.length > 1 && <div className="tab-strip lane-switcher" aria-label="Choose lane">
@@ -377,7 +376,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     <div className={`lanes${grid ? " lanes-grid" : ""}${shown.length >= 3 ? " lanes-many" : ""}`}>
       {shown.map((lane, index) => <div className="lane-wrap" key={lane.id} style={{ "--lane-width": widthPreview?.[lane.label] ?? layout.widths[lane.label] ?? 1 } as CSSProperties}>
         <LanePane lane={lane} file={fileFor(lane)} linked={workspace.linkDsl && workspace.lanes.filter((item) => item.mode === "scaffold").length > 1 && lane.mode === "scaffold"} editable={editable}
-          machine={machines?.find((item) => item.arch === lane.arch) ?? machine} machines={machines} setFile={(file) => select(lane, file)} setConfirm={setConfirm} add={add}
+          machine={machines?.find((target) => target.languages?.includes(lane.language))} setFile={(file) => select(lane, file)} setConfirm={setConfirm} add={add}
           canAdd={workspace.lanes.length < 4} canRemove={workspace.lanes.length > 1} jump={jump?.id === lane.id ? jump : undefined}
           onFocus={() => { if (selectedLane.id !== lane.id) select(lane); }} />
         {!grid && !tabs && index < shown.length - 1 && editable && <div className="lane-resizer" role="separator" tabIndex={0} aria-label={`Resize lanes ${lane.label} and ${shown[index + 1].label}`} aria-valuenow={Math.round((layout.widths[lane.label] ?? 1) * 50)}
@@ -408,17 +407,16 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
           onPointerCancel={() => setWidthPreview(null)} />}
       </div>)}
     </div>
-    {!shared && <div onPointerUp={() => { if (heightPreview !== null) { setLayout({ height: heightPreview }); setHeightPreview(null); } }} style={{ "--resized-panel": heightPreview === null ? undefined : `${heightPreview}px` } as CSSProperties}>
-      <RunPanel workspace={workspace} machine={machine} onJump={jumpTo} editable={editable} onResize={(height) => {
+    <div onPointerUp={() => { if (heightPreview !== null) { setLayout({ height: heightPreview }); setHeightPreview(null); } }} style={{ "--resized-panel": heightPreview === null ? undefined : `${heightPreview}px` } as CSSProperties}>
+      <RunPanel workspace={workspace} onJump={jumpTo} editable={editable} onResize={(height) => {
         const next = Math.max(240, Math.min(720, height));
         if (document.activeElement?.classList.contains("panel-resizer") && !root.current?.querySelector(".panel-resizer:active")) setLayout({ height: next });
         else setHeightPreview(next);
       }} />
-    </div>}
+    </div>
     {addOpen && <Overlay title="Add lane" onClose={() => setAddOpen(false)}><div className="overlay-body add-choices">
       <button type="button" className="control primary" onClick={() => add()}><PlusIcon size={16} aria-hidden="true" /> New lane</button>
       {workspace.lanes.map((lane) => <button type="button" className="control" key={lane.id} onClick={() => add(lane)}>Duplicate lane {lane.label}</button>)}
-      <Link className="control" to="/examples">From examples <ArrowUpRightIcon size={14} aria-hidden="true" /></Link>
     </div></Overlay>}
     {confirm && <Overlay title={confirm.title} onClose={() => setConfirm(null)}><div className="overlay-body">
       <p>{confirm.text}</p><div className="dialog-actions"><button type="button" className="control" onClick={() => setConfirm(null)}>{confirm.cancel ?? "Cancel"}</button>
@@ -427,7 +425,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
   </div>;
 }
 
-export default function Workbench({ machines, runControl }: { machines?: Machine[]; runControl: ReactNode }) {
+export default function Workbench({ machines }: { machines?: Machine[] }) {
   const workspace = useBench((s) => s.workspace);
   const [params, setParams] = useSearchParams();
   const exampleId = params.get("example");
@@ -446,20 +444,16 @@ export default function Workbench({ machines, runControl }: { machines?: Machine
   }, [exampleId, examples.data, location.key, setParams]);
 
   useEffect(() => {
-    const incoming = location.state as { workspace?: Workspace; fresh?: boolean; rerun?: boolean; fork?: boolean } | null;
+    const incoming = location.state as { workspace?: Workspace; fresh?: boolean; rerun?: boolean } | null;
     if (!incoming?.workspace || handled.current === location.key) return;
     handled.current = location.key;
     const next = incoming.fresh ? freshWorkspace(incoming.workspace) : incoming.workspace;
-    if (replaceWorkspace(next, Boolean(incoming.fresh))) {
-      if (incoming.fork) useBench.getState().notify({ text: "Forked to your workbench." });
-      if (incoming.rerun && !small.matches) {
-        const machines = query.getQueryData<Machine[]>(["machines"]);
-        if (next.lanes.every((lane) => machines?.some((machine) => machine.arch === lane.arch && machine.status !== "offline"))) void runBench(query);
-        else useBench.getState().notify({ text: "The selected machine is unavailable. Try again when it’s online.", error: true });
-      }
+    if (replaceWorkspace(next) && incoming.rerun && !small.matches) {
+      if (query.getQueryData<Machine[]>(["machines"])?.length) void runBench(query);
+      else useBench.getState().notify({ text: "The execution server is unavailable. Try again when it’s online.", error: true });
     }
     navigate(location.pathname + location.search, { replace: true, state: null });
   }, [location, navigate, query]);
 
-  return <>{exampleId && examples.isError && <div className="page bench-error"><p className="error-text">The example could not be loaded.</p><button className="control" type="button" onClick={() => void examples.refetch()}>Try again</button></div>}<WorkspaceView workspace={workspace} machines={machines} runControl={runControl} /></>;
+  return <>{exampleId && examples.isError && <div className="page bench-error"><p className="error-text">The example could not be loaded.</p><button className="control" type="button" onClick={() => void examples.refetch()}>Try again</button></div>}<WorkspaceView workspace={workspace} machines={machines} /></>;
 }

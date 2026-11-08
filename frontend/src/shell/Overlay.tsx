@@ -13,6 +13,8 @@ interface OverlayProps {
 
 export function Overlay({ title, children, onClose, drawer, palette }: OverlayProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Close on backdrop clicks only when the press also started there, so a text selection released over the backdrop keeps the dialog open.
+  const pressedBackdrop = useRef(false);
   const reduced = useReducedMotion();
   useLayoutEffect(() => {
     const dialog = ref.current!;
@@ -26,7 +28,8 @@ export function Overlay({ title, children, onClose, drawer, palette }: OverlayPr
       className={drawer ? "overlay drawer" : palette ? "overlay palette" : "overlay"}
       aria-labelledby="overlay-title"
       onCancel={(event) => { event.preventDefault(); onClose(); }}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onMouseDown={(event) => { pressedBackdrop.current = event.target === event.currentTarget; }}
+      onClick={(event) => { if (event.target === event.currentTarget && pressedBackdrop.current) onClose(); pressedBackdrop.current = false; }}
     >
       <motion.div
         className="overlay-content"

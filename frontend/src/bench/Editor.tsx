@@ -30,15 +30,6 @@ const dslLanguage = StreamLanguage.define({
   },
   tokenTable: { builtin: tags.standard(tags.variableName) },
 });
-const asmLanguage = StreamLanguage.define({
-  token(stream) {
-    if (stream.match(/(?:#|\/\/).*/)) return "comment";
-    if (stream.match(/(?:[.$%][\w]+|[\w.]+:)/)) return "keyword";
-    if (stream.match(/\d+/)) return "number";
-    stream.next();
-    return null;
-  },
-});
 const style = HighlightStyle.define([
   { tag: tags.keyword, class: "cm-token-keyword" },
   { tag: tags.comment, class: "cm-token-comment" },
@@ -103,7 +94,7 @@ const dslExtras = [
       const description = document.createElement("p");
       description.textContent = entry.description;
       const link = document.createElement("a");
-      link.href = `/guide#${entry.name}`;
+      link.href = `/docs/guide#${entry.name}`;
       link.textContent = "Open in guide";
       dom.append(signature, description, link);
       return { dom };
@@ -112,7 +103,7 @@ const dslExtras = [
 ];
 
 const language = (file: FileName): Extension => file === "benchmark.perf" ? dslExtras
-  : file === "harness.go" ? [go(), rulePlugin, sectionFolding] : file === "harness.py" ? [python(), rulePlugin, sectionFolding] : asmLanguage;
+  : file === "harness.go" ? [go(), rulePlugin, sectionFolding] : [python(), rulePlugin, sectionFolding];
 
 interface Props {
   file: FileName;
@@ -153,7 +144,8 @@ export default function Editor({ file, value, label, readOnly = false, onChange,
       extensions: [
         config.current.of([]), lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), drawSelection(),
         history(), bracketMatching(), closeBrackets(), foldGutter(), lintGutter(), EditorView.lineWrapping,
-        keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...foldKeymap]),
+        // Mod-Enter is left to the window handler that runs the bench; defaultKeymap would also insert a blank line.
+        keymap.of([...closeBracketsKeymap, ...defaultKeymap.filter((binding) => binding.key !== "Mod-Enter"), ...historyKeymap, ...foldKeymap]),
         syntaxHighlighting(style), language(file),
         EditorView.contentAttributes.of({ "aria-label": label, spellcheck: "false" }),
         ...(file === "benchmark.perf" ? [linter((current) => diagnostics(current.state.doc.toString()).map((issue) => {

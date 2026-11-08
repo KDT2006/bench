@@ -1,17 +1,7 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { USE_MOCK_API } from "../api/config";
-import type { Machine } from "../api/types";
-
-const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
-
-function size(bytes: number | undefined) {
-  if (bytes === undefined) return "Unavailable";
-  const unit = [[1024 ** 3, "GiB"], [1024 ** 2, "MiB"], [1024, "KiB"], [1, "B"]] as const;
-  const [factor, label] = unit.find(([factor]) => bytes >= factor) ?? unit[3];
-  return `${number.format(bytes / factor)} ${label}`;
-}
+import type { MachineSnapshot } from "../api/types";
+import { bytes, languages, num } from "../model/format";
 
 export function MachineState({ loading, error, retry }: { loading: boolean; error: boolean; retry: () => void }) {
   if (loading) return (
@@ -22,7 +12,7 @@ export function MachineState({ loading, error, retry }: { loading: boolean; erro
   );
   return (
     <div className="machine-state" role="status">
-      <p className={error ? "error-text" : undefined}>{error ? "Couldn’t load machines. Try again." : "No machines available. Check again for a connected machine."}</p>
+      <p className={error ? "error-text" : undefined}>{error ? "Couldn’t reach the execution server. Try again." : "No machine available. Check again for a connected server."}</p>
       <button className="control" type="button" onClick={retry}>
         <ArrowClockwiseIcon size={16} aria-hidden="true" /> {error ? "Try again" : "Check again"}
       </button>
@@ -30,78 +20,43 @@ export function MachineState({ loading, error, retry }: { loading: boolean; erro
   );
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="machine-group"><h3>{title}</h3>{children}</section>;
-}
-
-function Readouts({ rows }: { rows: [string, ReactNode][] }) {
-  return <dl className="readouts">{rows.map(([label, value]) => (
-    <div key={label}><dt>{label}</dt><dd>{value ?? "Unavailable"}</dd></div>
+function Readouts({ rows }: { rows: [string, ReactNode, string?][] }) {
+  return <dl className="machine-cards">{rows.map(([label, value, note]) => (
+    <div className="machine-card" key={label}><dt>{label}</dt><dd>{value ?? "Unavailable"}</dd>{note && <dd className="machine-card-note">{note}</dd>}</div>
   ))}</dl>;
 }
 
-export function MachineDetails({ machine, frozen = false }: { machine: Machine; frozen?: boolean }) {
-  const maxCache = Math.max(1, ...machine.caches.map((cache) => Math.log2(cache.sizeBytes)));
+export function MachineDetails({ machine, status }: { machine: MachineSnapshot; status?: string }) {
+  const hardware = machine.hardware;
+  const cacheTitle = useId();
   return (
     <div className="overlay-body machine-details">
       <div className="machine-identity">
-        <div><h3>{machine.cpuModel}</h3><p className="mono">{machine.arch}</p></div>
-        {!frozen && <span className="chip">{machine.status}</span>}
+        <div><h3>{machine.id}</h3><p className="mono">{machine.languages?.map((language) => languages[language]).join(" / ")} · {machine.arch}</p></div>
+        {status && <span className="chip">{status}</span>}
       </div>
-      {USE_MOCK_API && <p className="source-note">Sample snapshot from the local mock API.</p>}
-      <Group title="CPU">
+      <section className="machine-group" aria-label="Processor and system">
+        {hardware?.cpuModel && <div className="machine-cpu-model"><span>Processor</span><p>{hardware.cpuModel}</p></div>}
         <Readouts rows={[
-          ["Cores", machine.cores === undefined ? "Unavailable" : number.format(machine.cores)], ["Threads", number.format(machine.threads)], ["SMT", machine.smt === undefined ? "Unavailable" : machine.smt ? "On" : "Off"],
+          ["Architecture", machine.arch],
+          ["Operating system", machine.os],
+          ["Physical cores", hardware?.physicalCores ? num.format(hardware.physicalCores) : undefined, "OS-reported topology; may be virtualized"],
+          ["Logical CPUs", num.format(machine.threads), "Reported by the execution runtime"],
+          ["System memory", hardware?.memoryBytes ? bytes(hardware.memoryBytes) : undefined, "Host RAM reported by the OS"],
+          ["CPU governor", hardware?.governor, "CPU 0 frequency policy"],
+          ["Executors", machine.languages?.map((language) => languages[language]).join(", ") || "None"],
+          ["Kernel", hardware?.kernel],
         ]} />
-      </Group>
-      <Group title="Clocks">
-        <Readouts rows={[
-          ["Base", machine.baseMhz === undefined ? "Unavailable" : `${number.format(machine.baseMhz / 1000)} GHz`],
-          ["Boost", machine.boostMhz === undefined ? "Unavailable" : `${number.format(machine.boostMhz / 1000)} GHz`],
-          ["Governor", machine.governor],
-          ["Turbo", machine.turbo === undefined ? "Unavailable" : machine.turbo ? "On" : "Off"],
-        ]} />
-      </Group>
-      <Group title="Caches">
-        {machine.caches.length > 0 ? (
-          <ul className="caches" aria-label="Cache sizes on a logarithmic scale">
-            {machine.caches.map((cache) => (
-              <li key={cache.level}>
-                <span>{cache.level}</span>
-                <div className="cache-track" aria-hidden="true"><span style={{ width: `${100 * Math.log2(cache.sizeBytes) / maxCache}%` }} /></div>
-                <span>{size(cache.sizeBytes)}</span>
-                <span className="cache-detail">{size(cache.lineSize)} lines{cache.assoc === undefined ? "" : ` · ${number.format(cache.assoc)}-way`}</span>
-              </li>
-            ))}
-          </ul>
-        ) : <p className="help-text">Cache sizes are unavailable for this machine.</p>}
-      </Group>
-      <Group title="Memory">
-        <Readouts rows={[["RAM", size(machine.ramBytes)], ["Page size", size(machine.pageSize)]]} />
-      </Group>
-      <Group title="Operating system">
-        <Readouts rows={[
-          ["Kernel", machine.kernel],
-          ["Isolated cores", machine.os ? "Unavailable" : machine.isolatedCores.map((core) => number.format(core)).join(", ") || "None"],
-          ["Perf counters", machine.perfCounters === undefined ? "Reported per result" : machine.perfCounters ? "Available" : "Unavailable"],
-        ]} />
-      </Group>
-      <Group title="Toolchains">
-        <Readouts rows={Object.entries(machine.toolchains).length ? Object.entries(machine.toolchains) : [["Toolchain versions", "Unavailable"]]} />
-      </Group>
-      {!frozen && <Group title="Live state">
-        <Readouts rows={[["Status", machine.status], ["Queue length", machine.queueLength === undefined ? "Unavailable" : number.format(machine.queueLength)]]} />
-      </Group>}
-      {(!machine.os && (machine.turbo || machine.governor !== "performance" || !machine.isolatedCores.length)) && (
-        <div className="noise-note">
-          <WarningIcon size={16} aria-hidden="true" />
-          <div>
-            {machine.turbo && <p>Turbo is on. Expect more run-to-run variance.</p>}
-            {machine.governor !== "performance" && <p>The performance governor is off. Expect more run-to-run variance.</p>}
-            {!machine.isolatedCores.length && <p>No cores are isolated. Other processes can affect timings.</p>}
-          </div>
-        </div>
-      )}
+      </section>
+      {Boolean(hardware?.caches?.length) && <section className="machine-group" aria-labelledby={cacheTitle}>
+        <h3 id={cacheTitle}>Cache hierarchy</h3>
+        <p className="machine-caption">CPU 0 cache instances. Shared caches are shown once; sizes can differ across cores.</p>
+        <Readouts rows={hardware!.caches!.map((cache) => [
+          `L${cache.level} ${cache.type.toLowerCase()}`, bytes(cache.sizeBytes),
+          cache.sharedCpus ? `Logical CPUs ${cache.sharedCpus}` : undefined,
+        ])} />
+      </section>}
+      <p className="machine-caption">Reported by the {machine.languages?.map((language) => languages[language]).join(" / ")} executor through the proxy.</p>
     </div>
   );
 }

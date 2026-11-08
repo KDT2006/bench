@@ -1,13 +1,14 @@
 // Command benchscope-proxy sits between the website and the local execution servers.
 //
 // The website sends POST /api/execute with {name, byteCount, fenced, code, language, arch}.
-// The proxy drops language and arch, forwards {name, byteCount, fenced, code} to the local
-// server for that language, and converts the local server's raw results (see schema.go) into the
+// The proxy picks the local server for that language and OS/architecture, forwards
+// {name, byteCount, fenced, code} to it, and converts the local server's raw results (see schema.go) into the
 // shape the website reads.
 package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"sort"
@@ -26,41 +28,90 @@ const bodyLimit = 1 << 20 // 1 MiB
 
 // ExecuteRequest is what the website sends to the proxy.
 type ExecuteRequest struct {
-	Name      string `json:"name"`
-	ByteCount int64  `json:"byteCount"`
-	Fenced    bool   `json:"fenced"`
-	Code      string `json:"code"` // high-level code with the #directives
-	Language  string `json:"language"`
-	Arch      string `json:"arch"` // OS/architecture, e.g. linux/amd64
+	CompilerFlags []string `json:"compilerFlags,omitempty"`
+	Name          string   `json:"name"`
+	ByteCount     int64    `json:"byteCount"`
+	Fenced        bool     `json:"fenced"`
+	Code          string   `json:"code"` // high-level code with the #directives
+	Language      string   `json:"language"`
+	Arch          string   `json:"arch"` // OS/architecture, e.g. linux/amd64
 }
 
 // LocalRequest is what the proxy sends to a local execution server.
 type LocalRequest struct {
-	Name      string `json:"name"`
-	ByteCount int64  `json:"byteCount"`
-	Fenced    bool   `json:"fenced"`
-	Code      string `json:"code"`
+	CompilerFlags []string `json:"compilerFlags,omitempty"`
+	Name          string   `json:"name"`
+	ByteCount     int64    `json:"byteCount"`
+	Fenced        bool     `json:"fenced"`
+	Code          string   `json:"code"`
+}
+
+// backends maps "language/os/arch" (e.g. "go/linux/amd64") to a local server's execute URL.
+type backends map[string]string
+
+func (b backends) String() string { return fmt.Sprint(map[string]string(b)) }
+
+// Set parses one -backend flag: "go/darwin/arm64=http://192.168.1.20:6969/execute".
+func (b backends) Set(value string) error {
+	key, target, ok := strings.Cut(value, "=")
+	parts := strings.Split(key, "/")
+	if !ok || len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" || target == "" {
+		return errors.New("want language/os/arch=URL, e.g. go/linux/amd64=http://127.0.0.1:6969/execute")
+	}
+	b[strings.ToLower(key)] = target
+	return nil
+}
+
+// envTargets names the environment variables that hold each laptop executor's public URL
+// (e.g. an ngrok URL). An empty or unset variable leaves that target unconfigured.
+var envTargets = []struct{ name, key string }{
+	{"GO_LINUX_URL", "go/linux/amd64"},
+	{"PYTHON_LINUX_URL", "python/linux/amd64"},
+	{"GO_MAC_URL", "go/darwin/arm64"},
+	{"PYTHON_MAC_URL", "python/darwin/arm64"},
+}
+
+// applyEnv adds a backend for each non-empty envTargets variable. The value may be a base
+// URL ("https://abc.ngrok-free.app") or a full execute URL; /execute is appended if missing.
+func applyEnv(b backends, getenv func(string) string) {
+	for _, target := range envTargets {
+		value := strings.TrimRight(strings.TrimSpace(getenv(target.name)), "/")
+		if value == "" {
+			continue
+		}
+		if !strings.HasSuffix(value, "/execute") {
+			value += "/execute"
+		}
+		b[target.key] = value
+	}
 }
 
 type proxy struct {
-	backends map[string]string // language -> local server execute URL
+	backends backends
 	client   *http.Client
 	origin   string // value for Access-Control-Allow-Origin; empty disables CORS headers
 }
 
 func main() {
-	addr := flag.String("addr", ":8080", "listen address")
-	goURL := flag.String("go-url", "http://127.0.0.1:6969/execute", "execute URL of the local Go server")
-	pythonURL := flag.String("python-url", "", "execute URL of the local Python server; empty disables Python")
+	// Hosts such as Render assign the port through $PORT.
+	defaultAddr := ":8080"
+	if port := os.Getenv("PORT"); port != "" {
+		defaultAddr = ":" + port
+	}
+	addr := flag.String("addr", defaultAddr, "listen address (default :$PORT when PORT is set)")
 	origin := flag.String("allow-origin", "*", "origin allowed to call the proxy from a browser; empty disables CORS")
+	// Servers on this machine are configured by default; -backend adds or replaces entries.
+	local := runtime.GOOS + "/" + runtime.GOARCH
+	targets := backends{
+		"go/" + local:     "http://127.0.0.1:6969/execute",
+		"python/" + local: "http://127.0.0.1:6970/execute",
+	}
+	applyEnv(targets, os.Getenv)
+	flag.Var(targets, "backend", "language/os/arch=execute URL; repeatable; overrides the *_URL environment variables")
 	flag.Parse()
 
-	backends := map[string]string{"go": *goURL}
-	if *pythonURL != "" {
-		backends["python"] = *pythonURL
-	}
 	p := &proxy{
-		backends: backends,
+		backends: targets,
 		// Benchmarks compile and then run for several seconds per sweep combination.
 		client: &http.Client{Timeout: 15 * time.Minute},
 		origin: *origin,
@@ -73,7 +124,7 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		// No WriteTimeout: the response waits for the benchmark to finish.
 	}
-	log.Printf("benchscope proxy listening on %s, backends: %v", *addr, backends)
+	log.Printf("benchscope proxy listening on %s, backends: %v", *addr, targets)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -104,28 +155,100 @@ func (p *proxy) withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// Health describes the machine the proxy runs on. The local servers are expected to run on the
-// same machine, so the website uses this as its machine snapshot.
+// Health contains metadata fetched from each configured execution target.
+type ExecutorHealth struct {
+	Status    string          `json:"status"`
+	Hostname  string          `json:"hostname"`
+	OS        string          `json:"os"`
+	Arch      string          `json:"arch"`
+	CPUs      int             `json:"cpus"`
+	Languages []string        `json:"languages"`
+	Hardware  json.RawMessage `json:"hardware,omitempty"`
+}
+
+type TargetError struct {
+	Language string `json:"language"`
+	Arch     string `json:"arch"` // configured os/arch, e.g. darwin/arm64
+	Message  string `json:"message"`
+}
+
 type Health struct {
-	Status    string   `json:"status"`
-	Hostname  string   `json:"hostname"`
-	OS        string   `json:"os"`
-	Arch      string   `json:"arch"` // Go names: amd64, arm64
-	CPUs      int      `json:"cpus"`
-	Languages []string `json:"languages"` // languages with a configured local server
+	Status      string           `json:"status"`
+	Machines    []ExecutorHealth `json:"machines"`
+	Unavailable []TargetError    `json:"unavailable"`
+}
+
+func (p *proxy) targetHealth(ctx context.Context, language, arch, endpoint string) (ExecutorHealth, error) {
+	var info ExecutorHealth
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		return info, err
+	}
+	// A health endpoint is a sibling of /execute, preserving deployment prefixes.
+	target.Path = strings.TrimSuffix(strings.TrimRight(target.Path, "/"), "/execute") + "/health"
+	target.RawPath, target.RawQuery, target.Fragment = "", "", ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return info, err
+	}
+	response, err := p.client.Do(req)
+	if err != nil {
+		return info, fmt.Errorf("executor health is unreachable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return info, fmt.Errorf("executor health returned %d; update or check the executor", response.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, bodyLimit)).Decode(&info); err != nil {
+		return info, fmt.Errorf("invalid executor health response")
+	}
+	if info.Status != "ok" || info.Hostname == "" || info.OS == "" || info.Arch == "" || info.CPUs < 1 {
+		return info, fmt.Errorf("incomplete executor health response")
+	}
+	if reported := info.OS + "/" + info.Arch; reported != arch {
+		return info, fmt.Errorf("executor reports %s but is configured as %s", reported, arch)
+	}
+	info.Languages = []string{language}
+	return info, nil
 }
 
 func (p *proxy) health(w http.ResponseWriter, r *http.Request) {
-	hostname, _ := os.Hostname()
-	languages := make([]string, 0, len(p.backends))
-	for language := range p.backends {
-		languages = append(languages, language)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	type result struct {
+		machine ExecutorHealth
+		err     error
 	}
-	sort.Strings(languages)
-	writeJSON(w, http.StatusOK, Health{
-		Status: "ok", Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH,
-		CPUs: runtime.NumCPU(), Languages: languages,
-	})
+	keys := make([]string, 0, len(p.backends))
+	for key := range p.backends {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	// One slot per backend, filled concurrently, so the response order is stable.
+	results := make([]result, len(keys))
+	done := make(chan struct{})
+	for i, key := range keys {
+		go func() {
+			language, arch, _ := strings.Cut(key, "/")
+			machine, err := p.targetHealth(ctx, language, arch, p.backends[key])
+			results[i] = result{machine, err}
+			done <- struct{}{}
+		}()
+	}
+	for range keys {
+		<-done
+	}
+	health := Health{Status: "ok", Machines: []ExecutorHealth{}, Unavailable: []TargetError{}}
+	for i, entry := range results {
+		if entry.err != nil {
+			language, arch, _ := strings.Cut(keys[i], "/")
+			health.Status = "degraded"
+			health.Unavailable = append(health.Unavailable, TargetError{language, arch, entry.err.Error()})
+		} else {
+			health.Machines = append(health.Machines, entry.machine)
+		}
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
@@ -145,13 +268,14 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	language := strings.ToLower(strings.TrimSpace(req.Language))
-	target, ok := p.backends[language]
+	arch := strings.ToLower(strings.TrimSpace(req.Arch))
+	target, ok := p.backends[language+"/"+arch]
 	if !ok {
-		fail(w, http.StatusBadRequest, "No local server is configured for language %q.", req.Language)
+		fail(w, http.StatusBadRequest, "No local server is configured for %s on %s.", req.Language, req.Arch)
 		return
 	}
 
-	body, _ := json.Marshal(LocalRequest{Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
+	body, _ := json.Marshal(LocalRequest{CompilerFlags: req.CompilerFlags, Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
 	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "Could not build the request to the local server: %v", err)
@@ -159,11 +283,11 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream.Header.Set("Content-Type", "application/json")
 
-	log.Printf("execute %q (%s, %s) -> %s", req.Name, language, req.Arch, target)
+	log.Printf("execute %q (%s, %s) -> %s", req.Name, language, arch, target)
 	start := time.Now()
 	resp, err := p.client.Do(upstream)
 	if err != nil {
-		fail(w, http.StatusBadGateway, "Could not reach the %s local server at %s: %v", language, target, err)
+		fail(w, http.StatusBadGateway, "Could not reach the %s %s local server at %s: %v", language, arch, target, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -203,6 +327,14 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 }
 
 func validate(req ExecuteRequest) string {
+	if len(req.CompilerFlags) > 64 {
+		return "compilerFlags must contain at most 64 arguments."
+	}
+	for _, arg := range req.CompilerFlags {
+		if arg == "" || len(arg) > 4096 || strings.ContainsRune(arg, 0) {
+			return "compilerFlags must contain nonempty arguments of at most 4096 bytes, without NUL characters."
+		}
+	}
 	switch {
 	case strings.TrimSpace(req.Name) == "":
 		return "name is required."

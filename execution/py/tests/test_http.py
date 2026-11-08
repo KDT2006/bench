@@ -24,6 +24,16 @@ def server():
 
 
 class HTTPTests(unittest.TestCase):
+    def test_health_is_collected_by_executor_without_running_benchmarks(self):
+        info = dict(status="ok", hostname="python-target", os="linux", arch="arm64", cpus=8,
+                    hardware={"cpuModel": "Target CPU", "memoryBytes": 8192})
+        with server() as address, patch.object(main, "machine_health", return_value=info), patch.object(main, "RunSweep") as run:
+            status, headers, body = self.request(address, "GET", path="/health")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), info)
+            self.assertEqual(headers["Content-Type"], "application/json")
+            run.assert_not_called()
+
     def request(self, address, method="POST", body="", path="/execute", headers=None):
         connection = HTTPConnection(*address, timeout=5)
         try:

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"go/format"
 	"io"
@@ -97,6 +98,7 @@ func main() {
 `
 
 type ExecutionConfig struct {
+	CompilerFlags []string
 	BenchDuration time.Duration // Zero uses the default BenchTime.
 	Name          string
 	ByteCount     int
@@ -253,6 +255,9 @@ func ParseBenchmarkResult(stdout io.Reader) (BenchmarkResult, error) {
 // RunExecution compiles and runs a temporary executable. Call it from the Go
 // execution module so go build can resolve the local profiler dependency.
 func RunExecution(ctx context.Context, cfg ExecutionConfig) (BenchmarkResult, error) {
+	if err := validateCompilerFlags(cfg.CompilerFlags); err != nil {
+		return BenchmarkResult{}, err
+	}
 	source, err := BuildExecutionSource(cfg)
 	if err != nil {
 		return BenchmarkResult{}, err
@@ -267,7 +272,9 @@ func RunExecution(ctx context.Context, cfg ExecutionConfig) (BenchmarkResult, er
 	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
 		return BenchmarkResult{}, fmt.Errorf("write benchmark source: %w", err)
 	}
-	build := exec.CommandContext(ctx, "go", "build", "-o", executablePath, sourcePath)
+	args := append([]string{"build"}, cfg.CompilerFlags...)
+	args = append(args, "-o", executablePath, sourcePath)
+	build := exec.CommandContext(ctx, "go", args...)
 	if output, err := build.CombinedOutput(); err != nil {
 		return BenchmarkResult{}, fmt.Errorf("compile benchmark: %w\n%s", err, output)
 	}
@@ -338,16 +345,20 @@ func BuildSweepMatrix(sweep string) ([]string, [][]int, error) {
 
 // ExecutionRequest is the JSON payload accepted by POST /execute.
 type ExecutionRequest struct {
-	Name      string `json:"name"`
-	ByteCount int    `json:"byteCount"`
-	Fenced    bool   `json:"fenced"`
-	Code      string `json:"code"`
+	CompilerFlags []string `json:"compilerFlags,omitempty"`
+	Name          string   `json:"name"`
+	ByteCount     int      `json:"byteCount"`
+	Fenced        bool     `json:"fenced"`
+	Code          string   `json:"code"`
 }
 
 // ParseExecutionConfig separates directive blocks without changing their Go code.
 func ParseExecutionConfig(request ExecutionRequest) (ExecutionConfig, error) {
+	if err := validateCompilerFlags(request.CompilerFlags); err != nil {
+		return ExecutionConfig{}, err
+	}
 	cfg := ExecutionConfig{
-		Name: request.Name, ByteCount: request.ByteCount, Fenced: request.Fenced,
+		Name: request.Name, ByteCount: request.ByteCount, Fenced: request.Fenced, CompilerFlags: append([]string(nil), request.CompilerFlags...),
 	}
 	if strings.TrimSpace(request.Name) == "" {
 		return ExecutionConfig{}, fmt.Errorf("name is required")
@@ -483,10 +494,13 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	addr := flag.String("addr", "127.0.0.1:6969", "listen address; use 0.0.0.0:6969 to accept a proxy on another machine")
+	flag.Parse()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/execute", handleExecution)
+	mux.HandleFunc("GET /health", handleHealth)
 	server := &http.Server{
-		Addr:              "127.0.0.1:6969",
+		Addr:              *addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}

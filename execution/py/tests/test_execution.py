@@ -149,3 +149,20 @@ class ExecutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class CompilerOptionsTests(unittest.TestCase):
+    def test_options_affect_the_actual_child_interpreter(self):
+        for flags, level in [([], 0), (["-O"], 1), (["-OO", "-B", "-X", "dev"], 2)]:
+            with self.subTest(flags=flags):
+                cfg = ParseExecutionConfig({"name": "options", "compilerFlags": flags,
+                    "code": f'#imports\nimport sys\n#globals\ndef example():\n    "A docstring"\n'
+                            f'if sys.flags.optimize != {level}:\n    raise RuntimeError("options not applied")\n'
+                            f'if {level} == 2 and example.__doc__ is not None:\n    raise RuntimeError("docstrings kept")\n#bench\npass'})
+                result = RunExecution(replace(cfg, BenchDuration=0.005))
+                self.assertGreater(result["iterations"], 0)
+
+    def test_options_validate_types_and_preserve_entrypoint(self):
+        for flags in ["-O", None, [1], [""], ["-c", "print(1)"], ["-m", "timeit"],
+                      ["-i"], ["-X"], ["-W", "-O"], ["-O\0"], ["-O"] * 65]:
+            with self.subTest(flags=flags), self.assertRaises(ValueError):
+                ParseExecutionConfig({"name": "x", "code": "#bench", "compilerFlags": flags})

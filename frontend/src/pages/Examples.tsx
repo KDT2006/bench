@@ -1,14 +1,11 @@
-import { lazy, Suspense } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { getExamples } from "../api/client";
-import { expectations, sampleRun } from "../model/examples";
+import { expectations } from "../model/examples";
 import { languages, num } from "../model/format";
 
-const Instrument = lazy(() => import("../chart/Instrument"));
-const categories = ["CPU basics", "Branches", "Memory and caches", "Data structures and algorithms", "Math and FFI"];
 
 export default function Examples() {
   const [params, setParams] = useSearchParams();
@@ -17,6 +14,7 @@ export default function Examples() {
   const arch = params.get("arch") ?? "";
   const search = params.get("q") ?? "";
   const examples = useQuery({ queryKey: ["examples"], queryFn: ({ signal }) => getExamples(signal), retry: false });
+  const categories = [...new Set(examples.data?.map((entry) => entry.category))];
   const matching = examples.data?.filter(({ category: group, workspace, description }) => (!category || category === group) &&
     workspace.lanes.some((lane) => (!language || lane.language === language) && (!arch || lane.arch === arch)) &&
     `${workspace.title} ${description}`.toLowerCase().includes(search.trim().toLowerCase())) ?? [];
@@ -24,7 +22,7 @@ export default function Examples() {
     setParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next; }, { replace: true });
   }
   return <div className="page index-page">
-    <header className="page-heading"><h1>Examples</h1><p>Start with a benchmark you can open, change, and run in the workbench.</p></header>
+    <header className="page-heading"><h2>Examples</h2><p>Start with a benchmark you can open, change, and run in the workbench.</p></header>
     <div className="filter-bar"><div className="segmented" aria-label="Category">
       {["", ...categories].map((value) => <button key={value} className="control" type="button" aria-pressed={value === category} onClick={() => update("category", value)}>{value || "All examples"}</button>)}
     </div><div className="inline-controls">
@@ -36,18 +34,16 @@ export default function Examples() {
       : examples.isError ? <div className="empty-panel"><p className="error-text">Couldn’t load examples. Try again.</p><button className="control" type="button" onClick={() => void examples.refetch()}>Try again</button></div>
         : matching.length === 0 ? <div className="empty-panel"><p>{examples.data?.length ? "No examples match these filters." : "No examples are available yet."}</p>
           {params.size > 0 ? <button className="control" type="button" onClick={() => setParams({})}>Clear filters</button> : <Link className="control" to="/bench">Open the workbench</Link>}</div>
-          : [...new Set([...categories, ...matching.map((entry) => entry.category)])].map((group) => {
+          : categories.map((group) => {
             const entries = matching.filter((entry) => entry.category === group);
             if (!entries.length) return null;
             return <section className="example-group" key={group}><h2>{group}</h2><div className="example-grid">{entries.map((entry) => (
               <Link className="example-card" key={entry.id} to={`/bench?example=${encodeURIComponent(entry.id)}`}>
-                {entry.runId === sampleRun.id ? <Suspense fallback={<div className="loading-plot" role="status">Loading chart…</div>}><Instrument compact rows={sampleRun.rows} lanes={sampleRun.workspaceSnapshot.lanes} machine={sampleRun.machine} sweep={sampleRun.sweep} caption="Synthetic fixture thumbnail." /></Suspense>
-                  : <div className="example-preview"><TerminalWindowIcon size={24} aria-hidden="true" /><code>{entry.workspace.lanes[0]?.files["benchmark.perf"]?.match(/#bench\n([^\n]+)/)?.[1] ?? "benchmark.perf"}</code></div>}
+                <div className="example-preview"><TerminalWindowIcon size={24} aria-hidden="true" /><code>{entry.workspace.lanes[0]?.files["benchmark.perf"]?.match(/#bench\n([^\n]+)/)?.[1] ?? "benchmark.perf"}</code></div>
                 <div className="example-copy"><h3>{entry.workspace.title}</h3><p>{entry.description}</p>{expectations[entry.id] && <p className="help-text">{expectations[entry.id]}</p>}
                   <div className="param-chips">{[...new Set(entry.workspace.lanes.map((lane) => languages[lane.language]))].map((label) => <span className="chip" key={label}>{label}</span>)}
                     {[...new Set(entry.workspace.lanes.map((lane) => lane.arch))].map((label) => <span className="chip mono" key={label}>{label}</span>)}
-                    <span className="chip">{num.format(entry.workspace.lanes.length)} {entry.workspace.lanes.length === 1 ? "lane" : "lanes"}</span>
-                    {entry.workspace.lanes.some((lane) => lane.files["kernel.S"]) && <span className="chip">Assembly</span>}</div>
+                    <span className="chip">{num.format(entry.workspace.lanes.length)} {entry.workspace.lanes.length === 1 ? "lane" : "lanes"}</span></div>
                   <span className="text-action">Open in workbench <ArrowUpRightIcon size={15} aria-hidden="true" /></span>
                 </div>
               </Link>

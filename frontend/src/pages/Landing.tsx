@@ -1,16 +1,17 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { sampleRun } from "../model/examples";
-import { bytes, num } from "../model/format";
+import { languages, num } from "../model/format";
 import { API_BASE_URL } from "../api/config";
+import { getMachines } from "../api/client";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const LandingSequence = lazy(() => import("./LandingSequence"));
 const fixture = sampleRun.workspaceSnapshot;
-const machine = sampleRun.machine;
 
 function ServerStatus() {
   const [online, setOnline] = useState(false);
@@ -50,26 +51,25 @@ export default function Landing() {
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [reduced]);
-  const caches = (["L1d", "L2", "L3"] as const).map((level) => [level.replace("d", ""), machine.caches.find((cache) => cache.level === level)?.sizeBytes] as const);
-  const readouts = [
-    ["CPU model", machine.cpuModel], ["Base clock", machine.baseMhz === undefined ? "Unavailable" : `${num.format(machine.baseMhz / 1000)} GHz`],
-    ...caches.map(([level, size]) => [`${level} cache`, size ? bytes(size) : "Unavailable"]),
-    ["Isolated core", machine.isolatedCores.map((core) => num.format(core)).join(", ") || "None"],
-  ];
+  const machines = useQuery({ queryKey: ["machines"], queryFn: ({ signal }) => getMachines(signal), retry: false });
+  const machine = machines.data?.[0];
+  const readouts = machine ? [
+    ["Server", machine.id], ["Architecture", machine.arch], ["Operating system", machine.os ?? "Unavailable"],
+    ["CPU threads", num.format(machine.threads)], ["Executors", machine.languages?.map((language) => languages[language]).join(", ") || "None"],
+  ] : [];
 
   return <div className="landing">
     <section className="page landing-hero">
       <motion.div className="hero-lead" initial={reduced ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
         transition={{ duration: reduced ? 0 : 0.7, ease: [0.16, 1, 0.3, 1] }}>
         <h1>See where your code<br className="hero-break" /> spends its cycles.<svg className="hero-trace" aria-hidden="true" viewBox="0 0 84 24"><path d="M1 20H21V14H43V17H62V5H83" /><circle cx="21" cy="14" r="2.2"/><circle cx="43" cy="17" r="2.2"/><circle cx="62" cy="5" r="2.2"/><circle cx="83" cy="5" r="2.2"/></svg></h1>
-        <p>Write a benchmark in pseudocode, run it in Go, Python or assembly, and compare the results side by side.</p>
-        <div className="hero-actions"><BenchLink /><Link className="control landing-button" to="/examples">Browse examples</Link></div>
+        <p>Write a benchmark in pseudocode, run it in Go or Python, and compare the results side by side.</p>
+        <div className="hero-actions"><BenchLink /><Link className="control landing-button" to="/docs/examples">Browse examples</Link></div>
       </motion.div>
       <div className="hero-instrument">
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading sweep…</div>}>
-          <Instrument title="Array sum sweep" scaleRows={sampleRun.rows} rows={reduced ? sampleRun.rows : sampleRun.rows.slice(0, count)} lanes={fixture.lanes} machine={machine}
-            sweep={sampleRun.sweep} caption="Sample replay · Synthetic Go and Python fixture" beam={!reduced && count < sampleRun.rows.length}
-            tableHref={`/results/${sampleRun.id}#results-table`} />
+          <Instrument title="Array sum sweep" scaleRows={sampleRun.rows} rows={reduced ? sampleRun.rows : sampleRun.rows.slice(0, count)} lanes={fixture.lanes}
+            sweep={sampleRun.sweep} caption="Sample data · Synthetic Go and Python fixture" beam={!reduced && count < sampleRun.rows.length} />
         </Suspense>
       </div>
     </section>
@@ -78,7 +78,7 @@ export default function Landing() {
       <div className="landing-section-head"><h2>What you can measure</h2><p>Pick a workload and see what changes when the input grows.</p></div>
       <div className="bento">
         <Feature title="Cache cliffs" copy="Sweep array size through the cache hierarchy." id={sampleRun.id} className="feature-cache">
-          <Suspense fallback={<div className="instrument loading-plot" role="status">Loading sample chart…</div>}><Instrument compact rows={sampleRun.rows} lanes={fixture.lanes} machine={machine} sweep={sampleRun.sweep} caption="Synthetic array sum, cycles per element." /></Suspense>
+          <Suspense fallback={<div className="instrument loading-plot" role="status">Loading sample chart…</div>}><Instrument compact rows={sampleRun.rows} lanes={fixture.lanes} sweep={sampleRun.sweep} caption="Synthetic array sum, time per element." /></Suspense>
         </Feature>
         <Feature title="Branch prediction" copy="Compare the same branch over sorted and random data." id="branch-prediction" className="feature-branch">
           <div className="branch-diagram" role="img" aria-label="Schematic showing sorted and mixed branch outcomes">
@@ -91,7 +91,6 @@ export default function Landing() {
             <div><span>Struct of arrays</span><div>{["x", "x", "x", "y", "y", "y"].map((v, i) => <i key={i} data-field={v}>{v}</i>)}</div></div>
           </div>
         </Feature>
-        <Feature title="FFI overhead" copy="Compare work across the call boundary." id="ffi-overhead" className="feature-ffi"><pre><code>{'// Call into kernel.S\nresult := kernel(input)'}</code></pre></Feature>
         <Feature title="Page faults" copy="Measure the first touch of a memory region." id="page-faults" className="feature-faults">
           <img src="/dram.jpg" width="960" height="636" alt="" loading="lazy" />
         </Feature>
@@ -103,13 +102,13 @@ export default function Landing() {
     </section>
     <section className="page landing-section machine-section">
       <h2>Every result knows where it ran.</h2>
-      <p>Benchmarks run pinned to an isolated core, and every result keeps a snapshot of the machine that produced it.</p>
-      <dl className="landing-readouts">{readouts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-      <span className="help-text">Sample machine snapshot</span>
+      <p>Every result keeps a snapshot of the server that produced it: host, architecture, operating system and CPU threads.</p>
+      {readouts.length > 0 && <dl className="landing-readouts">{readouts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+      <span className="help-text">{machine ? "Connected execution server" : machines.isPending ? "Checking the execution server…" : "The execution server is offline."}</span>
     </section>
     <section className="landing-close"><div className="page"><h2>Pick an example and press run.</h2><BenchLink /></div></section>
     <footer className="landing-footer"><div className="page">
-      <Link className="brand" to="/">Benchscope</Link><ServerStatus /><nav aria-label="Footer"><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link><Link to="/benches">Library</Link></nav>
+      <Link className="brand" to="/">Bench.it</Link><ServerStatus /><nav aria-label="Footer"><Link to="/docs/examples">Examples</Link><Link to="/docs/guide">Guide</Link></nav>
       <details><summary>Photo credits</summary><div><a href="https://commons.wikimedia.org/wiki/File:Circuit_board_Closeup_(24884297897).jpg">Circuit board, Jonathan Cutrer (CC BY 2.0)</a><a href="https://commons.wikimedia.org/wiki/File:RAM-chips.jpg">RAM chips, Hannes Grobe (CC BY-SA 4.0)</a><p>Displayed with a monochrome treatment.</p></div></details>
     </div></footer>
   </div>;

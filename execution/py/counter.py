@@ -46,4 +46,8 @@ def NewCounter(e: Event) -> HardwareCounter:
         from ._counter_linux import newLinuxCounter
 
         return newLinuxCounter(e)
+    if sys.platform == "darwin":
+        from ._counter_darwin import newDarwinCounter
+
+        return newDarwinCounter(e)
     raise NotImplementedError(f"hardware counters not implemented on {sys.platform}")

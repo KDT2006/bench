@@ -1,10 +1,9 @@
 export type Lang = "go" | "python";
 export type Arch = "x86_64" | "arm64";
 export type Mode = "scaffold" | "ejected";
-export type FileName = "benchmark.perf" | "harness.go" | "harness.py" | "kernel.S";
+export type FileName = "benchmark.perf" | "harness.go" | "harness.py";
 
 export interface Workspace {
-  id?: string;               // set once saved
   title: string;
   linkDsl: boolean;          // scaffold lanes share one benchmark.perf
   lanes: Lane[];             // 1..4
@@ -25,7 +24,6 @@ export interface Lane {
     dslHash: string;         // hash of DSL used for last generate
     model: string;
     warnings: string[];
-    cached: boolean;
   };
   build: BuildOptions;
   runner: RunnerOptions;
@@ -35,14 +33,14 @@ export interface Lane {
 export interface BuildOptions {
   toolchainVersion: string;  // "go1.23", "cpython3.13"
   flags: string[];           // validated server-side
+  compilerOptions?: string; // Editable command line, including unfinished quotes.
   env: Record<string, string>;
-  asmFlags?: string[];
 }
 
 export interface RunnerOptions {
   maxReps?: number;
   minTimeMs?: number;
-  warmup: number;
+  warmup?: number;
   core?: number;
   memLimitMb?: number;
   counters: ("cycles" | "time" | "pageFaults" | "cacheMisses" | "branchMisses" | "throughput")[];
@@ -57,15 +55,15 @@ export interface Run {
   id: string;
   workspaceSnapshot: Workspace;
   machine: MachineSnapshot;
+  machines?: MachineSnapshot[];
   status: "queued" | "building" | "running" | "done" | "failed" | "cancelled";
   sweep: SweepParam[];
   rows: ResultRow[];
   startedAt: string;
   finishedAt?: string;
-  source?: "live" | "mock";
 }
 
-export interface Stat { min?: number; max?: number; median?: number; mean?: number; p95?: number; stddev?: number; fastest?: number; slowest?: number; }
+export interface Stat { min?: number; max?: number; mean?: number; fastest?: number; slowest?: number; }
 
 export interface ResultRow {
   laneId: string;
@@ -73,27 +71,38 @@ export interface ResultRow {
   reps: number;
   metrics: Partial<Record<"cycles" | "timeNs" | "pageFaults" | "cacheMisses" | "branchMisses" | "throughput", Stat>>;
   profiler?: ExecuteResult;
-  samples?: number[];        // optional raw cycles per rep, for distribution charts
 }
 
 export interface MachineSnapshot {
-  id: string;
+  id: string;                // server hostname
   arch: Arch;
-  cpuModel: string;
-  cores?: number; threads: number; smt?: boolean;
-  baseMhz?: number; boostMhz?: number; governor?: string; turbo?: boolean;
-  caches: { level: "L1d" | "L1i" | "L2" | "L3"; sizeBytes: number; lineSize: number; assoc?: number }[];
-  ramBytes?: number; pageSize?: number;
-  kernel?: string; isolatedCores: number[]; perfCounters?: boolean;
-  toolchains: Record<string, string>;
+  threads: number;
   os?: string;
   languages?: Lang[];
+  hardware?: MachineHardware;
+}
+
+export interface MachineHardware {
+  cpuModel?: string;
+  physicalCores?: number;
+  memoryBytes?: number;
+  kernel?: string;
+  governor?: string;
+  caches?: { level: string; type: string; sizeBytes: number; sharedCpus?: string }[];
+}
+
+export interface ExecutorHealth {
+  status: string; hostname: string; os: string; arch: string; cpus: number; languages: string[];
+  hardware?: MachineHardware;
 }
 
 export interface ProxyHealth {
-  status: string; hostname: string; os: string; arch: string; cpus: number; languages: string[];
+  status: string;
+  machines: ExecutorHealth[];
+  unavailable: { language: string; message: string }[];
 }
 export interface ExecuteRequest {
+  compilerFlags?: string[];
   name: string; byteCount: number; fenced: boolean; code: string; language: Lang; arch: string;
 }
 export interface CounterAvailability { l1DataMisses: boolean; branchMisses: boolean; }
@@ -114,26 +123,18 @@ export interface ExecuteResult {
 export interface ExecuteResponse { results: ExecuteResult[]; }
 
 export interface Machine extends MachineSnapshot {
-  status: "idle" | "busy" | "offline" | "ready";
-  queueLength?: number;
+  status: "ready";
 }
 
 export interface ParseResponse {
   sweep: SweepParam[];
-  permutations: number;
   errors: string[];
 }
 
 export interface ScaffoldResponse {
   code: string;
   warnings: string[];
-  cached: boolean;
   model: string;
-}
-
-export interface ShareSnapshot {
-  workspace: Workspace;
-  runId?: string;
 }
 
 export interface Example {
@@ -141,15 +142,13 @@ export interface Example {
   category: string;
   description: string;
   workspace: Workspace;
-  runId?: string;
 }
 
 export type RunEvent =
-  | { type: "queued"; position: number }
-  | { type: "build_start"; laneId: string }
+  | { type: "queued" }
+  | { type: "build_start"; laneId: string; translating?: boolean }
   | { type: "build_done"; laneId: string; ok: boolean; log: string }
   | { type: "perm_start"; laneId: string; index: number; total: number; params: ResultRow["params"] }
   | { type: "result"; laneId: string; row: ResultRow }
-  | { type: "stderr"; laneId: string; text: string }
   | { type: "done" }
   | { type: "error"; message: string; laneId?: string };

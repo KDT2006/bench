@@ -10,11 +10,16 @@ The local server listens at `http://127.0.0.1:6970/execute`. Override the addres
 with `--host` and `--port`. It executes submitted Python in the current user's
 environment, so it is intended for trusted local benchmark code.
 
-To enable Python in the existing proxy, start it in another terminal:
+`GET /health` reports this executor's hostname, OS, architecture and logical CPU
+count. On Linux it also reports optional hardware metadata (CPU model, physical
+cores, RAM, kernel, governor and cache instances). The proxy queries this endpoint
+to show the actual execution target's machine details.
+
+The proxy routes Python to this server by default. Start it in another terminal:
 
 ```sh
 cd proxy
-go run . -addr 127.0.0.1:8080 -python-url http://127.0.0.1:6970/execute
+go run . -addr 127.0.0.1:8080
 ```
 
 ## HTTP contract
@@ -29,6 +34,14 @@ curl http://127.0.0.1:6970/execute \
 
 `name` is required and `code` must contain `#bench`. `byteCount` defaults to zero
 and must be a nonnegative signed 64-bit integer; `fenced` defaults to false.
+Optional `compilerFlags` is an array of Python interpreter arguments, applied to
+every fresh benchmark process (for example `["-OO", "-B"]`). Supported flags are
+`-O`, `-OO`, `-B`, `-b`, `-bb`, `-u`, `-E`, `-I`, `-P`, `-s`, `-S`, `-d`,
+`-v`, `-vv`, `-q`, `-W`, `-X`, and `--check-hash-based-pycs`. `-W` and `-X`
+accept attached or separate values. `-O` removes assertions; `-OO` also removes
+docstrings. Empty options preserve interpreter defaults. Flags that replace the
+benchmark entrypoint, such as `-c` and `-m`, are rejected with `400`.
+
 Unknown JSON fields and bodies larger than 1 MiB are rejected. Requests must
 include `Content-Length` (as the proxy and curl do).
 

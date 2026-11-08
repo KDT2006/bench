@@ -11,7 +11,7 @@ const Instrument = lazy(() => import("../chart/Instrument"));
 const steps = [
   { title: "Write it", copy: "Describe the setup, the work to measure, and the input sizes to try in a small benchmark language." },
   { title: "Generate it", copy: "Turn the same benchmark into Go or Python. Inspect the generated harness before you run it." },
-  { title: "Measure it", copy: "Watch results appear as the sweep crosses cache boundaries. Keep the settings and machine with each run." },
+  { title: "Measure it", copy: "Watch results appear as the sweep grows. Each run keeps its settings and the machine it ran on." },
 ];
 export default function LandingSequence() {
   const root = useRef<HTMLDivElement>(null);
@@ -39,7 +39,7 @@ export default function LandingSequence() {
       <div className="sequence-panel"><header><h3>{steps[1].title}</h3><span className="mono">harness.go</span></header><p>{steps[1].copy}</p>
         <div className="read-editor"><Suspense fallback={<EditorSkeleton />}><Editor file="harness.go" label="Sample Go harness" value={lane.files["harness.go"]!} readOnly /></Suspense></div></div>
       <div className="sequence-panel"><header><h3>{steps[2].title}</h3><ArrowDownIcon size={16} aria-hidden="true" /></header><p>{steps[2].copy}</p>
-        <Suspense fallback={<div className="instrument loading-plot" role="status">Loading results…</div>}><Instrument title="Sample sweep" rows={sampleRun.rows} lanes={sampleRun.workspaceSnapshot.lanes} machine={sampleRun.machine} sweep={sampleRun.sweep} tableHref={`/results/${sampleRun.id}#results-table`} /></Suspense></div>
+        <Suspense fallback={<div className="instrument loading-plot" role="status">Loading results…</div>}><Instrument title="Sample sweep" rows={sampleRun.rows} lanes={sampleRun.workspaceSnapshot.lanes} sweep={sampleRun.sweep} /></Suspense></div>
     </div>
   </section>;
 }

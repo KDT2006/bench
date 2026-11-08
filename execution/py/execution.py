@@ -12,8 +12,10 @@ import subprocess
 import sys
 import tempfile
 import tokenize
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TextIO
+
+from .compiler_options import validate_compiler_flags
 
 BenchTime = 10.0  # Seconds; the wire format uses nanoseconds.
 ExecutionTimeout = 120.0  # Per sweep combination, including interpreter startup.
@@ -43,13 +45,14 @@ class ExecutionConfig:
     Setup: str = ""
     Bench: str = ""
     Cleanup: str = ""
+    CompilerFlags: list[str] = field(default_factory=list)
 
 
 def ParseExecutionConfig(request: dict) -> ExecutionConfig:
     """Split directive blocks while preserving Python comments and indentation."""
     if not isinstance(request, dict):
         raise ValueError("body must contain one JSON object")
-    unknown = request.keys() - {"name", "byteCount", "fenced", "code"}
+    unknown = request.keys() - {"name", "byteCount", "fenced", "code", "compilerFlags"}
     if unknown:
         raise ValueError(f"unknown request field: {sorted(unknown)[0]}")
     name = request.get("name", "")
@@ -64,7 +67,7 @@ def ParseExecutionConfig(request: dict) -> ExecutionConfig:
         raise ValueError("fenced must be a boolean")
     if not isinstance(code, str):
         raise ValueError("code must be a string")
-    cfg = ExecutionConfig(Name=name, ByteCount=byte_count, Fenced=fenced)
+    cfg = ExecutionConfig(Name=name, ByteCount=byte_count, Fenced=fenced, CompilerFlags=validate_compiler_flags(request.get("compilerFlags", [])))
     blocks = {"#" + name.lower(): name for name in
               ("Imports", "Globals", "Sweep", "Setup", "Bench", "Cleanup")}
     code = code.replace("\r\n", "\n")
@@ -217,6 +220,7 @@ def ParseBenchmarkResult(stdout: TextIO) -> dict:
 
 def RunExecution(cfg: ExecutionConfig, timeout: float = ExecutionTimeout) -> dict:
     """Run a fresh interpreter, kill it on timeout, and remove temporary files."""
+    flags = validate_compiler_flags(cfg.CompilerFlags)
     source = BuildExecutionSource(cfg)
     with tempfile.TemporaryDirectory(prefix="bench-python-") as directory:
         source_path = Path(directory) / "benchmark.py"
@@ -226,7 +230,7 @@ def RunExecution(cfg: ExecutionConfig, timeout: float = ExecutionTimeout) -> dic
                 tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr:
             try:
                 process = subprocess.run(
-                    [sys.executable, "-u", str(source_path)],
+                    [sys.executable, *flags, "-u", str(source_path)],
                     stdout=stdout, stderr=stderr, timeout=timeout, check=False,
                 )
             except subprocess.TimeoutExpired as exc:
