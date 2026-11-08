@@ -88,21 +88,27 @@ export async function runBench(query: QueryClient) {
     useBench.setState({ active: { id, snapshot: run.workspaceSnapshot, rows: run.rows, status: run.status, events: [...events] } });
   };
   try {
-    const [machine] = await getMachines(controller.signal);
+    const machines = (await getMachines(controller.signal)).filter((target) =>
+      snapshot.lanes.some((lane) => target.languages?.includes(lane.language)));
+    const machine = machines[0];
+    if (!machine) throw new Error("No execution targets are available.");
     controller.signal.throwIfAborted();
     for (const lane of snapshot.lanes) {
-      if (lane.arch !== machine.arch) throw new Error(`Lane ${lane.label}: select the server architecture (${machine.arch}).`);
-      if (!machine.languages?.includes(lane.language)) throw new Error(`Lane ${lane.label}: no ${languages[lane.language]} executor is configured.`);
+      const target = machines.find((machine) => machine.languages?.includes(lane.language));
+      if (!target) throw new Error(`Lane ${lane.label}: no ${languages[lane.language]} executor is available.`);
+      if (lane.arch !== target.arch) throw new Error(`Lane ${lane.label}: select the executor architecture (${target.arch}).`);
     }
-    run = { id, workspaceSnapshot: snapshot, machine, status: "building", sweep: unionSweep(snapshot.lanes), rows: [], startedAt: new Date().toISOString() };
+    run = { id, workspaceSnapshot: snapshot, machine, machines, status: "building", sweep: unionSweep(snapshot.lanes), rows: [], startedAt: new Date().toISOString() };
     publish({ type: "queued" });
     for (let laneIndex = 0; laneIndex < snapshot.lanes.length; laneIndex++) {
       controller.signal.throwIfAborted();
       let lane = snapshot.lanes[laneIndex];
+      const target = machines.find((machine) => machine.languages?.includes(lane.language))!;
       executingLane = lane;
       run = { ...run, status: "building" };
-      publish({ type: "build_start", laneId: lane.id });
-      if (isStale(lane)) lane = (await generate(lane, false, controller.signal)).lane;
+      const translating = isStale(lane);
+      publish({ type: "build_start", laneId: lane.id, translating });
+      if (translating) lane = (await generate(lane, false, controller.signal)).lane;
       controller.signal.throwIfAborted();
       snapshot.lanes[laneIndex] = lane;
       const document = parseSections(lane.files[harness(lane.language)] ?? "");
@@ -114,7 +120,7 @@ export async function runBench(query: QueryClient) {
         publish({ type: "perm_start", laneId: lane.id, index: index + 1, total: permutations.length, params });
         const response = await execute({
           name: `${snapshot.title} · Lane ${lane.label}`, byteCount: lane.execution?.byteCount ?? 0, fenced: lane.execution?.fenced ?? true,
-          language: lane.language, arch: `${machine.os}/${machine.arch === "x86_64" ? "amd64" : "arm64"}`,
+          language: lane.language, arch: `${target.os}/${target.arch === "x86_64" ? "amd64" : "arm64"}`,
           code: assembleSections({ ...document.sections, sweep: serializeSweep(Object.entries(params).map(([name, value]) => ({ name, values: [value] }))) }),
         }, controller.signal);
         controller.signal.throwIfAborted();
@@ -122,7 +128,7 @@ export async function runBench(query: QueryClient) {
         run = { ...run, rows: [...run.rows, row] };
         publish({ type: "result", laneId: lane.id, row });
       }
-      publish({ type: "build_done", laneId: lane.id, ok: true, log: "Generation and execution completed." });
+      publish({ type: "build_done", laneId: lane.id, ok: true, log: "Execution completed." });
     }
     run = { ...run, status: "done", finishedAt: new Date().toISOString() };
     publish({ type: "done" });

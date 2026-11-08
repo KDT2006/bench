@@ -54,6 +54,7 @@ export interface Run {
   id: string;
   workspaceSnapshot: Workspace;
   machine: MachineSnapshot;
+  machines?: MachineSnapshot[];
   status: "queued" | "building" | "running" | "done" | "failed" | "cancelled";
   sweep: SweepParam[];
   rows: ResultRow[];
@@ -77,10 +78,27 @@ export interface MachineSnapshot {
   threads: number;
   os?: string;
   languages?: Lang[];
+  hardware?: MachineHardware;
+}
+
+export interface MachineHardware {
+  cpuModel?: string;
+  physicalCores?: number;
+  memoryBytes?: number;
+  kernel?: string;
+  governor?: string;
+  caches?: { level: string; type: string; sizeBytes: number; sharedCpus?: string }[];
+}
+
+export interface ExecutorHealth {
+  status: string; hostname: string; os: string; arch: string; cpus: number; languages: string[];
+  hardware?: MachineHardware;
 }
 
 export interface ProxyHealth {
-  status: string; hostname: string; os: string; arch: string; cpus: number; languages: string[];
+  status: string;
+  machines: ExecutorHealth[];
+  unavailable: { language: string; message: string }[];
 }
 export interface ExecuteRequest {
   name: string; byteCount: number; fenced: boolean; code: string; language: Lang; arch: string;
@@ -126,7 +144,7 @@ export interface Example {
 
 export type RunEvent =
   | { type: "queued" }
-  | { type: "build_start"; laneId: string }
+  | { type: "build_start"; laneId: string; translating?: boolean }
   | { type: "build_done"; laneId: string; ok: boolean; log: string }
   | { type: "perm_start"; laneId: string; index: number; total: number; params: ResultRow["params"] }
   | { type: "result"; laneId: string; row: ResultRow }

@@ -179,8 +179,12 @@ export function App() {
   });
   const machine = machines.data?.[0];
   const laneArches = useBench((s) => [...new Set(s.workspace.lanes.map((lane) => lane.arch))].join(", "));
-  const archMismatch = Boolean(machine && workbench && laneArches !== machine.arch);
-  const machineLabel = machine ? `${machine.id} · ${machine.arch} · ${num.format(machine.threads)} threads${archMismatch ? ` · lanes use ${laneArches}` : ""}`
+  const workspaceLanes = useBench((s) => s.workspace.lanes);
+  const archMismatch = Boolean(workbench && workspaceLanes.some((lane) => {
+    const target = machines.data?.find((target) => target.languages?.includes(lane.language));
+    return target && target.arch !== lane.arch;
+  }));
+  const machineLabel = machines.data && machines.data.length > 1 ? `${machines.data.length} execution targets` : machine ? `${machine.id} · ${machine.arch} · ${num.format(machine.threads)} threads${archMismatch ? ` · lanes use ${laneArches}` : ""}`
     : machines.isPending ? "Checking machine…" : machines.isError ? "Machine unavailable" : "No machine available";
   const isOffline = !machine || machines.isError;
   const runHint = mobile ? "Open on a larger screen to edit and run"
@@ -193,7 +197,7 @@ export function App() {
     flushEditors();
     void runBench(query);
   };
-  const shortMachineLabel = machine ? `${machine.arch} · ${num.format(machine.threads)} threads` : machineLabel;
+  const shortMachineLabel = machines.data && machines.data.length > 1 ? `${machines.data.length} targets` : machine ? `${machine.arch} · ${num.format(machine.threads)} threads` : machineLabel;
   const close = () => setDialog(null);
 
   useEffect(() => {
@@ -297,7 +301,7 @@ export function App() {
       {dialog && (
         <Overlay key={dialog} title={dialogTitles[dialog]} onClose={close} drawer={dialog === "machine"} palette={dialog === "commands"}>
           {dialog === "settings" && <Settings />}
-          {dialog === "machine" && (machine ? <MachineDetails machine={machine} status={archMismatch ? `Lanes use ${laneArches}` : "Ready"} /> : (
+          {dialog === "machine" && (machine ? <>{machines.data?.map((target, index) => <MachineDetails key={`${target.id}-${index}`} machine={target} status="Ready" />)}</> : (
             <div className="overlay-body"><MachineState loading={machines.isFetching} error={machines.isError} retry={() => void machines.refetch()} /></div>
           ))}
           {dialog === "commands" && <CommandPalette actions={actions} shortcut={shortcut} />}

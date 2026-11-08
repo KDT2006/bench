@@ -485,6 +485,7 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/execute", handleExecution)
+	mux.HandleFunc("GET /health", handleHealth)
 	server := &http.Server{
 		Addr:              "127.0.0.1:6969",
 		Handler:           mux,

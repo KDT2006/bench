@@ -76,6 +76,8 @@ export default function Instrument({ rows, scaleRows = rows, lanes, sweep, setti
       const maxX = isNumeric ? Math.max(...xValues.map(Number)) : 1;
       const groupValues = sweep.find((entry) => entry.name === settings.group)?.values ?? [null];
       const categoryLabels = xValues.map((v) => param(xName, v));
+      const sweepLabels = !compact && settings.type === "line";
+      const xLabelOptions = sweepLabels ? { show: true, showMinLabel: true, showMaxLabel: true, rotate: 30 } : {};
       const axes = { axisLine: { lineStyle: { color: hairline } }, axisLabel: { color: secondary, fontFamily: mono, fontSize: compact ? 9 : 10, hideOverlap: true }, splitLine: { lineStyle: { color: grid } }, axisTick: { show: false } };
       let series: Record<string, unknown>[] = lanes.flatMap((lane, laneIndex) => groupValues.map((groupValue, groupIndex) => {
         const own = rows.filter((row) => row.laneId === lane.id && (groupValue === null || row.params[settings.group] === groupValue));
@@ -115,16 +117,18 @@ export default function Instrument({ rows, scaleRows = rows, lanes, sweep, setti
       const xAxis = settings.type === "scatter" ? { ...axes, type: settings.logX ? "log" : "value", name: metricNames[settings.compareMetric],
           axisLabel: { ...axes.axisLabel, formatter: (v: number) => formatMetric(settings.compareMetric, v) } }
         : numericX ? { ...axes, type: settings.logX ? "log" : "value", logBase: 2, min: minX, max: maxX > minX ? maxX : undefined, name: xName,
-          axisLabel: { ...axes.axisLabel, formatter: (v: number) => param(xName, v) } }
-          : { ...axes, type: "category", data: categoryLabels, name: xName };
+          axisLabel: { ...axes.axisLabel, ...xLabelOptions, ...(sweepLabels ? { customValues: xValues } : {}), formatter: (v: number) => sweepLabels ? num.format(v) : param(xName, v) },
+          axisTick: { show: sweepLabels, customValues: xValues, lineStyle: { color: hairline } } }
+          : { ...axes, type: "category", data: categoryLabels, name: xName,
+            axisLabel: { ...axes.axisLabel, ...xLabelOptions, ...(sweepLabels ? { interval: 0 } : {}) } };
       const yAxis = settings.type === "heatmap" && y
         ? { ...axes, type: "category", data: y.values.map((v) => param(y.name, v)), name: y.name }
         : { ...axes, type: logY ? "log" : "value", logBase: 2, name: heading,
           ...(settings.metric === "timeNs" && settings.type !== "ratio" ? { axisLabel: { ...axes.axisLabel, formatter: (v: number) => time(v) } } : {}) };
       chart.setOption({
         animation: false, textStyle: { color: primary, fontFamily: mono }, color: colors,
-        grid: { left: compact ? 38 : 64, right: compact ? 16 : 34, top: compact ? 16 : 38, bottom: compact ? 24 : 45 },
-        xAxis: { ...xAxis, nameTextStyle: { color: secondary }, nameLocation: "middle", nameGap: 28, name: compact ? "" : xAxis.name },
+        grid: { left: compact ? 38 : 64, right: compact ? 16 : 34, top: compact ? 16 : 38, bottom: compact ? 24 : 45, containLabel: !compact },
+        xAxis: { ...xAxis, nameTextStyle: { color: secondary }, nameLocation: "middle", nameGap: sweepLabels ? 48 : 28, name: compact ? "" : xAxis.name },
         yAxis: { ...yAxis, nameTextStyle: { color: secondary }, name: compact ? "" : yAxis.name },
         series,
         ...(heatData.length ? { visualMap: { min: Math.min(...heatData.map((p) => Number(p[2]))), max: Math.max(...heatData.map((p) => Number(p[2]))), show: false, inRange: { color: [token("--raised"), colors[Math.max(0, lanes.findIndex((lane) => lane.id === settings.heatLane))] || primary] } } } : {}),

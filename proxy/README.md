@@ -88,13 +88,25 @@ Errors are `{"message": "..."}`:
 
 ### `GET /api/health`
 
-Describes the machine the proxy runs on (the local servers are expected on the same machine):
+Fetches `GET /health` from each configured executor (a sibling of its `/execute`
+URL, preserving any path prefix). The response contains `machines`, with each
+executor's hostname, OS, architecture, logical CPU count, optional hardware details,
+and the language routed to that executor. Go and Python targets remain separate,
+even when their hostnames match. Queries run concurrently with a three-second timeout.
 
 ```json
-{ "status": "ok", "hostname": "box", "os": "linux", "arch": "amd64", "cpus": 8, "languages": ["go"] }
+{"status":"ok","machines":[{"status":"ok","hostname":"go-host","os":"linux","arch":"amd64","cpus":8,"languages":["go"]}],"unavailable":[]}
 ```
 
-`languages` lists the languages with a configured local server.
+Unreachable, outdated, or invalid executor responses appear in `unavailable` as
+`{"language":"python","message":"..."}` and set status to `degraded`. Proxy host
+metadata is never substituted. Update both executors when upgrading the proxy.
+
+On Linux, each executor's optional `hardware` includes CPU model, physical core
+count, OS-reported RAM bytes, kernel release, CPU 0 frequency governor, and CPU 0's
+cache hierarchy (level, type, byte size, and shared logical CPUs). Missing kernel
+files leave individual details unavailable. Cache sizes are per instance, not sums
+across CPUs; virtualized topology and OS-reported RAM may reflect the guest.
 
 ## Test
 

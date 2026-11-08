@@ -154,7 +154,14 @@ func TestExecuteLocalServerErrors(t *testing.T) {
 }
 
 func TestHealthAndCORS(t *testing.T) {
-	h := newTestProxy("http://127.0.0.1:1")
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Errorf("unexpected health path: %s", r.URL.Path)
+		}
+		io.WriteString(w, `{"status":"ok","hostname":"executor-host","os":"linux","arch":"arm64","cpus":8,"hardware":{"cpuModel":"Remote CPU"}}`)
+	}))
+	defer local.Close()
+	h := newTestProxy(local.URL + "/execute")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
 	if rec.Code != http.StatusOK || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
@@ -162,12 +169,46 @@ func TestHealthAndCORS(t *testing.T) {
 	}
 	var health Health
 	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil || health.Status != "ok" ||
-		len(health.Languages) != 1 || health.Languages[0] != "go" || health.Arch == "" || health.CPUs < 1 {
+		len(health.Machines) != 1 || health.Machines[0].Hostname != "executor-host" || health.Machines[0].Arch != "arm64" || health.Machines[0].CPUs != 8 || health.Machines[0].Languages[0] != "go" {
 		t.Fatalf("health body: %s (%v)", rec.Body, err)
 	}
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodOptions, "/api/execute", nil))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("preflight: %d", rec.Code)
+	}
+}
+
+func TestHealthKeepsSeparateTargetsAndFailures(t *testing.T) {
+	goTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/prefix/health" {
+			t.Errorf("wrong path %s", r.URL.Path)
+		}
+		io.WriteString(w, `{"status":"ok","hostname":"go-host","os":"linux","arch":"amd64","cpus":12}`)
+	}))
+	defer goTarget.Close()
+	pyTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"status":"ok","hostname":"python-host","os":"linux","arch":"arm64","cpus":4}`)
+	}))
+	defer pyTarget.Close()
+	p := &proxy{backends: map[string]string{"go": goTarget.URL + "/prefix/execute", "python": pyTarget.URL + "/execute"}, client: http.DefaultClient}
+	record := func() Health {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		p.health(rec, httptest.NewRequest("GET", "/api/health", nil))
+		var health Health
+		if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+			t.Fatal(err)
+		}
+		return health
+	}
+	health := record()
+	if len(health.Machines) != 2 || health.Machines[0].Hostname != "go-host" || health.Machines[1].Hostname != "python-host" || health.Machines[1].Arch != "arm64" || health.Machines[1].Languages[0] != "python" {
+		t.Fatalf("targets mixed: %+v", health)
+	}
+	pyTarget.Close()
+	health = record()
+	if health.Status != "degraded" || len(health.Machines) != 1 || len(health.Unavailable) != 1 || health.Unavailable[0].Language != "python" {
+		t.Fatalf("expected explicit failure, without proxy metadata: %+v", health)
 	}
 }

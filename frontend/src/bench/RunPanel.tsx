@@ -17,7 +17,7 @@ const noRows: never[] = [];
 function eventText(event: RunEvent) {
   switch (event.type) {
     case "queued": return "Run started.";
-    case "build_start": return "Translating and preparing…";
+    case "build_start": return event.translating ? "Translating and preparing…" : "Preparing execution…";
     case "build_done": return event.ok ? "Build complete." : event.log;
     case "perm_start": return `Permutation ${num.format(event.index)} of ${num.format(event.total)} · ${params(event.params)}`;
     case "result": return `Result kept · ${num.format(event.row.reps)} reps`;

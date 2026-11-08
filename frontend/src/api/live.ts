@@ -1,14 +1,14 @@
-import type { ExecuteResult, Machine, ProxyHealth, ResultRow, Run } from "./types";
+import type { ExecuteResult, Machine, ExecutorHealth, ResultRow, Run } from "./types";
 
 // Live results belong to this tab; the proxy does not persist run resources.
 export const liveRuns = new Map<string, Run>();
 
-export function machineFromHealth(health: ProxyHealth): Machine {
+export function machineFromHealth(health: ExecutorHealth): Machine {
   if (health.arch !== "amd64" && health.arch !== "arm64") throw new Error(`Unsupported server architecture: ${health.arch}.`);
   return {
     id: health.hostname, os: health.os, arch: health.arch === "amd64" ? "x86_64" : "arm64", threads: health.cpus,
     languages: health.languages.filter((language): language is "go" | "python" => language === "go" || language === "python"),
-    status: "ready",
+    hardware: health.hardware, status: "ready",
   };
 }
 

@@ -10,6 +10,11 @@ The local server listens at `http://127.0.0.1:6970/execute`. Override the addres
 with `--host` and `--port`. It executes submitted Python in the current user's
 environment, so it is intended for trusted local benchmark code.
 
+`GET /health` reports this executor's hostname, OS, architecture and logical CPU
+count. On Linux it also reports optional hardware metadata (CPU model, physical
+cores, RAM, kernel, governor and cache instances). The proxy queries this endpoint
+to show the actual execution target's machine details.
+
 To enable Python in the existing proxy, start it in another terminal:
 
 ```sh

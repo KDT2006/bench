@@ -21,14 +21,20 @@ const post = (body: unknown, signal?: AbortSignal): RequestInit => ({
 export const generateScaffold = (body: { dsl: string; language: Lane["language"]; arch: Lane["arch"] }, signal?: AbortSignal) =>
   request<ScaffoldResponse>("/api/scaffold", post(body, signal));
 
-export const getMachines = async (signal?: AbortSignal): Promise<Machine[]> =>
-  [machineFromHealth(await request<ProxyHealth>(`${API_BASE_URL}/health`, { signal }))];
+export const getMachines = async (signal?: AbortSignal): Promise<Machine[]> => {
+  const health = await request<ProxyHealth>(`${API_BASE_URL}/health`, { signal });
+  if (health.unavailable.length) throw new Error(health.unavailable.map(({ language, message }) => `${language}: ${message}`).join("; "));
+  return health.machines.map(machineFromHealth);
+};
 
 export const getExamples = async (signal?: AbortSignal): Promise<Example[]> => {
-  const [machine] = await getMachines(signal);
+  const machines = await getMachines(signal);
   return exampleFixtures.map((example) => ({
     ...example,
-    workspace: { ...example.workspace, lanes: example.workspace.lanes.filter((lane) => machine.languages?.includes(lane.language)).map((lane) => ({ ...lane, arch: machine.arch })) },
+    workspace: { ...example.workspace, lanes: example.workspace.lanes.flatMap((lane) => {
+      const machine = machines.find((machine) => machine.languages?.includes(lane.language));
+      return machine ? [{ ...lane, arch: machine.arch }] : [];
+    }) },
   })).filter((example) => example.workspace.lanes.length > 0);
 };
 

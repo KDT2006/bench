@@ -75,3 +75,49 @@ test("build-error line numbers ignore port numbers", async () => {
   assert.equal(buildErrorLine("./harness.go:12:5: undefined: foo"), 12);
   assert.equal(buildErrorLine('File "harness.py", line 7, in <module>'), 7);
 });
+
+test("machine health retains optional hardware details in run snapshots", async () => {
+  const { machineFromHealth } = await load("/src/api/live.ts");
+  const base = { hostname: "test-host", os: "linux", arch: "amd64", cpus: 20, languages: ["go", "python"] };
+  const hardware = { cpuModel: "Test CPU", physicalCores: 14, memoryBytes: 8 * 1024 ** 3,
+    kernel: "6.8-test", caches: [{ level: "3", type: "Unified", sizeBytes: 24 * 1024 ** 2, sharedCpus: "0-19" }] };
+  const machine = machineFromHealth({ ...base, hardware });
+  assert.deepEqual(machine.hardware, hardware);
+  assert.equal(machine.threads, 20);
+  assert.equal(machineFromHealth(base).hardware, undefined);
+});
+
+test("results CSV exports table measurements once with units, derived values and no raw profiler columns", async () => {
+  const { resultsCsv } = await load("/src/model/resultsCsv.ts");
+  const run = {
+    sweep: [{ name: "N", values: [1024, 4096] }],
+    workspaceSnapshot: { lanes: [{ id: "a", label: "A", name: 'Sum, "array"', language: "python" }] },
+    rows: [
+      { laneId: "a", params: { N: 1024, input: 'Sum, "array"' }, reps: 100, metrics: { timeNs: { min: 0.123456789 }, pageFaults: { mean: 0 } },
+        profiler: { timerFrequency: 1000000000, totalPageFaults: 0, counterAvailability: { l1DataMisses: false, branchMisses: true }, measurements: { TotalTime: 12345 } } },
+      { laneId: "a", params: { N: 4096, stride: 8 }, reps: 200, metrics: { timeNs: { min: 42 }, branchMisses: { fastest: 0 } } },
+    ],
+  };
+  const csv = resultsCsv(run);
+  assert.ok(csv.endsWith("\r\n"));
+  assert.match(csv, /"Sum, ""array"""/);
+  // Parse quoted cells, including escaped commas and quotes.
+  const cells = (line) => [...line.matchAll(/"((?:[^"]|"")*)"(?:,|$)/g)].map((match) => match[1].replaceAll('""', '"'));
+  const [headers, ...rows] = csv.trimEnd().split("\r\n").map(cells);
+  const value = (row, name) => row[headers.indexOf(name)];
+  assert.equal(rows.length, 2);
+  for (const row of rows) assert.equal(row.length, headers.length);
+  assert.equal(value(rows[0], "Min time (ns)"), "0.123456789");
+  assert.equal(value(rows[0], "Min time per element (ns)"), String(0.123456789 / 1024));
+  assert.equal(headers.filter((name) => name.startsWith("Lane")).length, 1);
+  assert.equal(new Set(headers).size, headers.length);
+  assert.ok(headers.every((name) => !name.startsWith("profiler.")));
+  assert.ok(!headers.includes("L1 data-cache misses · fastest timed iteration"));
+  assert.ok(!headers.includes("Max time (ns)"));
+  assert.equal(value(rows[0], "N"), "1024");
+  assert.equal(value(rows[1], "stride"), "8");
+  assert.equal(value(rows[1], "Branch-prediction misses · fastest timed iteration"), "0");
+  assert.equal(value(rows[0], "Branch-prediction misses · fastest timed iteration"), "");
+  assert.equal(value(rows[0], "Total page faults"), "0");
+  assert.equal(value(rows[1], "Total page faults"), "");
+});

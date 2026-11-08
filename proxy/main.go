@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,8 +16,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"runtime"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -104,28 +104,93 @@ func (p *proxy) withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// Health describes the machine the proxy runs on. The local servers are expected to run on the
-// same machine, so the website uses this as its machine snapshot.
+// Health contains metadata fetched from each configured execution target.
+type ExecutorHealth struct {
+	Status    string          `json:"status"`
+	Hostname  string          `json:"hostname"`
+	OS        string          `json:"os"`
+	Arch      string          `json:"arch"`
+	CPUs      int             `json:"cpus"`
+	Languages []string        `json:"languages"`
+	Hardware  json.RawMessage `json:"hardware,omitempty"`
+}
+
+type TargetError struct {
+	Language string `json:"language"`
+	Message  string `json:"message"`
+}
+
 type Health struct {
-	Status    string   `json:"status"`
-	Hostname  string   `json:"hostname"`
-	OS        string   `json:"os"`
-	Arch      string   `json:"arch"` // Go names: amd64, arm64
-	CPUs      int      `json:"cpus"`
-	Languages []string `json:"languages"` // languages with a configured local server
+	Status      string           `json:"status"`
+	Machines    []ExecutorHealth `json:"machines"`
+	Unavailable []TargetError    `json:"unavailable"`
+}
+
+func (p *proxy) targetHealth(ctx context.Context, language, endpoint string) (ExecutorHealth, error) {
+	var info ExecutorHealth
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		return info, err
+	}
+	// A health endpoint is a sibling of /execute, preserving deployment prefixes.
+	target.Path = strings.TrimSuffix(strings.TrimRight(target.Path, "/"), "/execute") + "/health"
+	target.RawPath, target.RawQuery, target.Fragment = "", "", ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return info, err
+	}
+	response, err := p.client.Do(req)
+	if err != nil {
+		return info, fmt.Errorf("executor health is unreachable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return info, fmt.Errorf("executor health returned %d; update or check the executor", response.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, bodyLimit)).Decode(&info); err != nil {
+		return info, fmt.Errorf("invalid executor health response")
+	}
+	if info.Status != "ok" || info.Hostname == "" || info.OS == "" || info.Arch == "" || info.CPUs < 1 {
+		return info, fmt.Errorf("incomplete executor health response")
+	}
+	info.Languages = []string{language}
+	return info, nil
 }
 
 func (p *proxy) health(w http.ResponseWriter, r *http.Request) {
-	hostname, _ := os.Hostname()
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	type result struct {
+		language string
+		machine  ExecutorHealth
+		err      error
+	}
+	results := make(chan result, len(p.backends))
+	for language, endpoint := range p.backends {
+		go func() {
+			machine, err := p.targetHealth(ctx, language, endpoint)
+			results <- result{language, machine, err}
+		}()
+	}
+	byLanguage := map[string]result{}
 	languages := make([]string, 0, len(p.backends))
-	for language := range p.backends {
-		languages = append(languages, language)
+	for range p.backends {
+		entry := <-results
+		byLanguage[entry.language] = entry
+		languages = append(languages, entry.language)
 	}
 	sort.Strings(languages)
-	writeJSON(w, http.StatusOK, Health{
-		Status: "ok", Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH,
-		CPUs: runtime.NumCPU(), Languages: languages,
-	})
+	health := Health{Status: "ok", Machines: []ExecutorHealth{}, Unavailable: []TargetError{}}
+	for _, language := range languages {
+		entry := byLanguage[language]
+		if entry.err != nil {
+			health.Status = "degraded"
+			health.Unavailable = append(health.Unavailable, TargetError{language, entry.err.Error()})
+		} else {
+			health.Machines = append(health.Machines, entry.machine)
+		}
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {

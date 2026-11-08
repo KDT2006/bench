@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type CellContext, type ColumnDef, type SortingState, type VisibilityState } from "@tanstack/react-table";
+import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState, type VisibilityState } from "@tanstack/react-table";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { ArrowUpIcon } from "@phosphor-icons/react/dist/csr/ArrowUp";
@@ -11,6 +11,8 @@ import { chartTypes, defaultChart, LaneBadge, laneRatio, type ChartSettings, typ
 import { date, duration, formatMetric, formatRatio, harness, laneVar, languages, metricNames, num, param, params, paramsKey, statusLabel, time, type Metric } from "../model/format";
 import { MachineDetails } from "../shell/MachineDetails";
 import { download } from "../model/download";
+import { resultsCsv } from "../model/resultsCsv";
+import { resultColumns } from "../model/resultColumns";
 import { EditorSkeleton } from "../bench/Workbench";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
@@ -97,14 +99,8 @@ function InputComparison({ rows, lanes, metric, stat }: { rows: ResultRow[]; lan
   </section>;
 }
 
-function exportCsv(run: Run) {
-  const names = [...new Set([...run.sweep.map(({ name }) => name), ...run.rows.flatMap((row) => Object.keys(row.params))])];
-  const allStats: (keyof Stat)[] = stats.map(([name]) => name);
-  const fields = ["Lane", ...names, "Repetitions", "totalPageFaults", "l1DataMissesAvailable", "branchMissesAvailable", ...metrics.flatMap((metric) => allStats.map((stat) => `${metric}.${stat}`))];
-  const rows = run.rows.map((row) => [run.workspaceSnapshot.lanes.find((lane) => lane.id === row.laneId)?.label, ...names.map((name) => row.params[name]),
-    row.reps, row.profiler?.totalPageFaults, row.profiler?.counterAvailability.l1DataMisses, row.profiler?.counterAvailability.branchMisses, ...metrics.flatMap((metric) => allStats.map((stat) => row.metrics[metric]?.[stat]))]);
-  const csv = [fields, ...rows].map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\r\n");
-  download(`benchscope-${run.id}.csv`, new Blob([csv], { type: "text/csv;charset=utf-8" }));
+function exportCsv(run: Run, settings: ChartSettings) {
+  download(`benchscope-${run.id}.csv`, new Blob(["\uFEFF", resultsCsv(run, settings)], { type: "text/csv;charset=utf-8" }));
 }
 
 function ResultTable({ run, settings }: { run: Run; settings: ChartSettings }) {
@@ -115,42 +111,24 @@ function ResultTable({ run, settings }: { run: Run; settings: ChartSettings }) {
   const [visibility, setVisibility] = useState<VisibilityState>({ timeMax: false, timeAvg: false, ticksMin: false, ticksMax: false, ticksMean: false, pageFaults: false, throughput: false });
   const lanes = run.workspaceSnapshot.lanes;
   const columns = useMemo<ColumnDef<ResultRow>[]>(() => {
-    const byId = new Map(lanes.map((lane) => [lane.id, lane]));
-    const ratio = laneRatio(run.rows, lanes, settings.metric, settings.stat);
-    const numeric = (id: string, header: string, accessorFn: (row: ResultRow) => number | undefined): ColumnDef<ResultRow> => ({
-      id, header, accessorFn, cell: (cell) => show(cell.getValue() as number | undefined),
-    });
-    const timed = (id: string, header: string, accessorFn: (row: ResultRow) => number | undefined): ColumnDef<ResultRow> => ({
-      id, header, accessorFn, cell: (cell) => { const value = cell.getValue() as number | undefined; return value === undefined ? "—" : <span title={`${num.format(value)} ns`}>{time(value)}</span>; },
-    });
-    return [
-      { id: "lane", header: "Lane", accessorFn: (row) => byId.get(row.laneId)?.label, enableHiding: false, cell: ({ row }) => {
-        const lane = byId.get(row.original.laneId); return lane && <LaneBadge lane={lane} />;
-      } },
-      ...run.sweep.map(({ name }) => ({
-        id: `param-${name}`, header: name, accessorFn: (row: ResultRow) => row.params[name],
-        cell: (cell: { getValue: () => unknown }) => cell.getValue() === undefined ? "—" : param(name, cell.getValue() as string | number),
-      })),
-      timed("time", "Min time", (row) => row.metrics.timeNs?.min),
-      timed("timeMax", "Max time", (row) => row.metrics.timeNs?.max),
-      timed("timeAvg", "Mean time", (row) => row.metrics.timeNs?.mean),
-      ...(settings.size ? [timed("perSize", `Min time per ${settings.normalize === "byte" ? "byte" : "element"}`, (row) => {
-        const value = row.params[settings.size]; return typeof value === "number" && value > 0 && row.metrics.timeNs?.min !== undefined ? row.metrics.timeNs.min / value : undefined;
-      })] : []),
-      ...(["min", "max", "mean"] as const).map((key) => numeric(`ticks${key[0].toUpperCase() + key.slice(1)}`, `${key[0].toUpperCase() + key.slice(1)} timer ticks`, (row) => row.metrics.cycles?.[key])),
-      numeric("reps", "Reps", (row) => row.reps),
-      numeric("pageFaults", "Mean page faults", (row) => row.metrics.pageFaults?.mean),
-      numeric("pageFaults-fastest", "Page faults · fastest timed iteration", (row) => row.metrics.pageFaults?.fastest),
-      numeric("pageFaults-slowest", "Page faults · slowest timed iteration", (row) => row.metrics.pageFaults?.slowest),
-      numeric("totalPageFaults", "Total page faults", (row) => row.profiler?.totalPageFaults),
-      numeric("throughput", "Min throughput (GiB/s)", (row) => row.metrics.throughput?.min),
-      ...(["cacheMisses", "branchMisses"] as const).flatMap((metric) => (["fastest", "slowest"] as const).map((stat) =>
-        numeric(`${metric}-${stat}`, `${metricNames[metric]} · ${stat} timed iteration`, (row) => row.metrics[metric]?.[stat]))),
-      ...(lanes.length > 1 ? [{
-        ...numeric("ratio", `Ratio to ${lanes[0].label}`, ratio),
-        cell: (cell: CellContext<ResultRow, unknown>) => formatRatio(cell.getValue() as number | undefined),
-      }] : []),
-    ];
+    return resultColumns(run, settings).map((column) => ({
+      id: column.id,
+      header: column.unit && column.kind !== "time" ? `${column.label} (${column.unit})` : column.label,
+      accessorFn: column.value,
+      enableHiding: column.kind !== "lane",
+      cell: ({ row, getValue }) => {
+        const value = getValue();
+        if (column.kind === "lane") {
+          const lane = lanes.find((lane) => lane.id === row.original.laneId);
+          return lane ? <LaneBadge lane={lane} /> : String(value);
+        }
+        if (value === undefined) return "—";
+        if (column.kind === "param") return param(column.label, value as string | number);
+        if (column.kind === "time") return <span title={`${num.format(value as number)} ns`}>{time(value as number)}</span>;
+        if (column.kind === "ratio") return formatRatio(value as number);
+        return show(value as number);
+      },
+    }));
   }, [lanes, run.rows, run.sweep, settings.metric, settings.stat, settings.size, settings.normalize]);
   const data = useMemo(() => run.rows.filter((row) => (!laneFilter || laneFilter === row.laneId) &&
     Object.entries(row.params).map(([key, value]) => `${key}=${param(key, value)}`).join(" ").toLowerCase().includes(search.toLowerCase())), [run.rows, laneFilter, search]);
@@ -160,6 +138,9 @@ function ResultTable({ run, settings }: { run: Run; settings: ChartSettings }) {
   }
   return <section className="result-section" id="results-table" aria-labelledby="result-table-title">
     <div className="section-line table-controls"><h2 id="result-table-title">Results table</h2><div className="inline-controls">
+      <button className="control" type="button" onClick={() => exportCsv(run, settings)} title="Export all rows and available table measurements; time values are in nanoseconds">
+        <DownloadSimpleIcon size={16} aria-hidden="true" /> Export all CSV
+      </button>
       <label className="sr-only" htmlFor="table-lane">Filter by lane</label><select id="table-lane" value={laneFilter} onChange={(e) => update("tableLane", e.target.value)}>
         <option value="">All lanes</option>{lanes.map((lane) => <option key={lane.id} value={lane.id}>Lane {lane.label}</option>)}
       </select>
@@ -194,7 +175,7 @@ function RunConfiguration({ run }: { run: Run }) {
       </dl>
       {(["benchmark.perf", harness(lane.language)] as FileName[]).map((file) => lane.files[file] !== undefined && <details key={file} className="snapshot-file"><summary><code>{file}</code></summary><div className="read-editor"><Suspense fallback={<EditorSkeleton />}><Editor file={file} value={lane.files[file]!} label={`Lane ${lane.label} snapshot ${file}`} readOnly /></Suspense></div></details>)}</div>
     </details>)}</div>
-    <details className="snapshot-details"><summary>Machine snapshot · {run.machine.id}</summary><p className="help-text">Captured for this run.</p><MachineDetails machine={run.machine} /></details>
+    <details className="snapshot-details"><summary>Execution target snapshots</summary><p className="help-text">Captured for this run.</p><>{(run.machines ?? [run.machine]).map((machine, index) => <MachineDetails key={`${machine.id}-${index}`} machine={machine} />)}</></details>
   </section>;
 }
 
@@ -247,13 +228,13 @@ function RunView({ run }: { run: Run }) {
 
   return <div className="page results-page">
     <div className="results-heading">
-      <div><h1>{run.workspaceSnapshot.title}</h1><p>{date.format(new Date(run.startedAt))} · {run.machine.id} · {run.machine.arch} · {num.format(run.machine.threads)} threads · {num.format(run.rows.length)} results · {duration(run.startedAt, run.finishedAt)}</p>
+      <div><h1>{run.workspaceSnapshot.title}</h1><p>{date.format(new Date(run.startedAt))} · {run.machines && run.machines.length > 1 ? `${run.machines.length} execution targets` : `${run.machine.id} · ${run.machine.arch} · ${num.format(run.machine.threads)} threads`} · {num.format(run.rows.length)} results · {duration(run.startedAt, run.finishedAt)}</p>
         <div className="result-status"><span className="chip">{statusLabel(run.status)}</span>{run.rows.length > 0 && <span className="chip">Measured on hardware</span>}</div></div>
       <div className="inline-controls">
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true }} className="control">Open in workbench</Link>
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true, rerun: true }} className="control primary">Run again</Link>
         <details className="action-menu"><summary className="control"><DownloadSimpleIcon size={16} aria-hidden="true" /> Export</summary><div className="menu-panel">
-          <button type="button" onClick={() => exportCsv(run)}>CSV</button>
+          <button type="button" onClick={() => exportCsv(run, settings)}>Results CSV (all data)</button>
           <button type="button" onClick={() => download(`benchscope-${run.id}.json`, new Blob([JSON.stringify(run, null, 2)], { type: "application/json" }))}>JSON</button>
           <button type="button" onClick={() => { const image = exportRef.current?.(); if (image) download(`benchscope-${run.id}.png`, image); }}>Chart PNG</button>
         </div></details>

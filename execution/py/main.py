@@ -11,6 +11,7 @@ import threading
 from urllib.parse import urlsplit
 
 from .execution import BuildSweepMatrix, ExecutionError, ParseExecutionConfig, RunSweep
+from .hardware import machine_health
 
 BODY_LIMIT = 1024 * 1024
 # One benchmark at a time: children pin to the same core, so overlapping runs corrupt timings.
@@ -72,7 +73,13 @@ class ExecutionHandler(BaseHTTPRequestHandler):
         else:
             self._respond(404, "Not found\n")
 
-    do_GET = do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
+    def do_GET(self):
+        if urlsplit(self.path).path == "/health":
+            self._respond(200, json.dumps(machine_health()), "application/json")
+        else:
+            self._method_not_allowed()
+
+    do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
 
 
 def main():

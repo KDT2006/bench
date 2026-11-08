@@ -248,14 +248,16 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
   const grid = !tabs && workspace.lanes.length >= 3 && layout.grid;
   const shown = tabs ? [selectedLane] : workspace.lanes;
 
-  // Only the server's architecture can run, so lanes follow it. This isn't a user edit, so it leaves `dirty` alone.
-  const serverArch = machine?.arch;
+  // Each lane follows the architecture of its language's execution target.
   useEffect(() => {
-    if (!serverArch) return;
+    if (!machines?.length) return;
     const current = useBench.getState().workspace;
-    if (current.lanes.every((lane) => lane.arch === serverArch)) return;
-    useBench.setState({ workspace: { ...current, lanes: current.lanes.map((lane) => ({ ...lane, arch: serverArch })) } });
-  }, [serverArch, workspace]);
+    const lanes = current.lanes.map((lane) => {
+      const target = machines.find((target) => target.languages?.includes(lane.language));
+      return target && target.arch !== lane.arch ? { ...lane, arch: target.arch } : lane;
+    });
+    if (lanes.some((lane, index) => lane !== current.lanes[index])) useBench.setState({ workspace: { ...current, lanes } });
+  }, [machines, workspace]);
 
   function select(lane: Lane, file?: FileName) {
     setParams((current) => {
@@ -364,7 +366,7 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
     } : undefined}>
     <h1 className="sr-only">Workbench</h1>
     {mobile ? <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div> : <div className="bench-banner">
-      <span>{machine ? `Live ${machine.languages?.map((language) => languages[language]).join(" and ") || ""} execution on ${machine.id}` : "Waiting for the execution server."}</span>
+      <span>{machine ? `Live execution: ${machines?.map((target) => `${target.languages?.map((language) => languages[language]).join(", ")} on ${target.id}`).join(" · ")}` : "Waiting for the execution server."}</span>
       <div className="bench-tools">
         <button className="control" type="button" onClick={loadLiveExample} disabled={!machine}>Load live Array sum</button>
         <label className="control link-toggle"><input type="checkbox" checked={workspace.linkDsl} onChange={toggleLink} /><LinkSimpleIcon size={15} aria-hidden="true" /> Linked DSL</label>
@@ -382,7 +384,7 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
     <div className={`lanes${grid ? " lanes-grid" : ""}${shown.length >= 3 ? " lanes-many" : ""}`}>
       {shown.map((lane, index) => <div className="lane-wrap" key={lane.id} style={{ "--lane-width": widthPreview?.[lane.label] ?? layout.widths[lane.label] ?? 1 } as CSSProperties}>
         <LanePane lane={lane} file={fileFor(lane)} linked={workspace.linkDsl && workspace.lanes.filter((item) => item.mode === "scaffold").length > 1 && lane.mode === "scaffold"} editable={editable}
-          machine={machine} setFile={(file) => select(lane, file)} setConfirm={setConfirm} add={add}
+          machine={machines?.find((target) => target.languages?.includes(lane.language))} setFile={(file) => select(lane, file)} setConfirm={setConfirm} add={add}
           canAdd={workspace.lanes.length < 4} canRemove={workspace.lanes.length > 1} jump={jump?.id === lane.id ? jump : undefined}
           onFocus={() => { if (selectedLane.id !== lane.id) select(lane); }} />
         {!grid && !tabs && index < shown.length - 1 && editable && <div className="lane-resizer" role="separator" tabIndex={0} aria-label={`Resize lanes ${lane.label} and ${shown[index + 1].label}`} aria-valuenow={Math.round((layout.widths[lane.label] ?? 1) * 50)}

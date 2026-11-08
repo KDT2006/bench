@@ -75,7 +75,7 @@ The executor controls the run window (currently ten seconds per combination) and
 
 ## Measurements
 
-Live requests use `GET /api/health` and `POST /api/execute`. Machine details are limited to what health reports: hostname, OS, architecture, CPU threads and configured languages. Health lists configured backends; an execution error is still possible if an upstream server is offline.
+Live requests use `GET /api/health` and `POST /api/execute`. The proxy fetches machine details from each configured executor, including hostname, OS, architecture, logical CPUs and optional hardware details. Each language retains its execution target; runs save these target snapshots. Unavailable executor health is reported as an error rather than showing proxy host statistics.
 
 Results retain timer ticks and min/max/average time. Charts and tables default to time, shown in readable units. Throughput is GiB/s.
 
