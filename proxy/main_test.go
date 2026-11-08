@@ -10,7 +10,7 @@ import (
 )
 
 func newTestProxy(goURL string) http.Handler {
-	p := &proxy{backends: map[string]string{"go": goURL}, client: http.DefaultClient, origin: "*"}
+	p := &proxy{backends: backends{"go/linux/amd64": goURL}, client: http.DefaultClient, origin: "*"}
 	return p.handler()
 }
 
@@ -158,7 +158,7 @@ func TestHealthAndCORS(t *testing.T) {
 		if r.URL.Path != "/health" {
 			t.Errorf("unexpected health path: %s", r.URL.Path)
 		}
-		io.WriteString(w, `{"status":"ok","hostname":"executor-host","os":"linux","arch":"arm64","cpus":8,"hardware":{"cpuModel":"Remote CPU"}}`)
+		io.WriteString(w, `{"status":"ok","hostname":"executor-host","os":"linux","arch":"amd64","cpus":8,"hardware":{"cpuModel":"Remote CPU"}}`)
 	}))
 	defer local.Close()
 	h := newTestProxy(local.URL + "/execute")
@@ -169,7 +169,7 @@ func TestHealthAndCORS(t *testing.T) {
 	}
 	var health Health
 	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil || health.Status != "ok" ||
-		len(health.Machines) != 1 || health.Machines[0].Hostname != "executor-host" || health.Machines[0].Arch != "arm64" || health.Machines[0].CPUs != 8 || health.Machines[0].Languages[0] != "go" {
+		len(health.Machines) != 1 || health.Machines[0].Hostname != "executor-host" || health.Machines[0].Arch != "amd64" || health.Machines[0].CPUs != 8 || health.Machines[0].Languages[0] != "go" {
 		t.Fatalf("health body: %s (%v)", rec.Body, err)
 	}
 	rec = httptest.NewRecorder()
@@ -191,7 +191,7 @@ func TestHealthKeepsSeparateTargetsAndFailures(t *testing.T) {
 		io.WriteString(w, `{"status":"ok","hostname":"python-host","os":"linux","arch":"arm64","cpus":4}`)
 	}))
 	defer pyTarget.Close()
-	p := &proxy{backends: map[string]string{"go": goTarget.URL + "/prefix/execute", "python": pyTarget.URL + "/execute"}, client: http.DefaultClient}
+	p := &proxy{backends: backends{"go/linux/amd64": goTarget.URL + "/prefix/execute", "python/linux/arm64": pyTarget.URL + "/execute"}, client: http.DefaultClient}
 	record := func() Health {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -208,7 +208,61 @@ func TestHealthKeepsSeparateTargetsAndFailures(t *testing.T) {
 	}
 	pyTarget.Close()
 	health = record()
-	if health.Status != "degraded" || len(health.Machines) != 1 || len(health.Unavailable) != 1 || health.Unavailable[0].Language != "python" {
+	if health.Status != "degraded" || len(health.Machines) != 1 || len(health.Unavailable) != 1 || health.Unavailable[0].Language != "python" || health.Unavailable[0].Arch != "linux/arm64" {
 		t.Fatalf("expected explicit failure, without proxy metadata: %+v", health)
+	}
+}
+
+func TestExecuteRoutesByLanguageAndArch(t *testing.T) {
+	p := &proxy{backends: backends{}, client: http.DefaultClient}
+	hits := map[string]int{}
+	for _, key := range []string{"go/linux/amd64", "python/linux/amd64", "go/darwin/arm64", "python/darwin/arm64"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits[key]++
+			w.Write([]byte(localBody))
+		}))
+		defer server.Close()
+		p.backends[key] = server.URL
+	}
+	h := p.handler()
+	for key := range p.backends {
+		language, arch, _ := strings.Cut(key, "/")
+		body := `{"name":"n","byteCount":0,"fenced":true,"code":"x","language":"` + language + `","arch":"` + arch + `"}`
+		if rec := post(t, h, body); rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d %s", key, rec.Code, rec.Body)
+		}
+		if hits[key] != 1 {
+			t.Fatalf("%s was not routed to its server: %v", key, hits)
+		}
+	}
+	rec := post(t, h, `{"name":"n","byteCount":0,"fenced":true,"code":"x","language":"go","arch":"windows/amd64"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown arch: status %d", rec.Code)
+	}
+}
+
+func TestHealthRejectsMismatchedArch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"status":"ok","hostname":"mac","os":"darwin","arch":"arm64","cpus":8}`)
+	}))
+	defer server.Close()
+	p := &proxy{backends: backends{"go/linux/amd64": server.URL + "/execute"}, client: http.DefaultClient}
+	rec := httptest.NewRecorder()
+	p.health(rec, httptest.NewRequest("GET", "/api/health", nil))
+	var health Health
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil || health.Status != "degraded" || len(health.Unavailable) != 1 {
+		t.Fatalf("mismatch should be unavailable: %s", rec.Body)
+	}
+}
+
+func TestBackendFlag(t *testing.T) {
+	b := backends{}
+	if err := b.Set("Go/darwin/arm64=http://mac:6969/execute"); err != nil || b["go/darwin/arm64"] != "http://mac:6969/execute" {
+		t.Fatalf("set: %v %v", err, b)
+	}
+	for _, bad := range []string{"go=http://x", "go/linux/amd64", "go/linux/amd64=", "go//amd64=http://x"} {
+		if b.Set(bad) == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
 	}
 }

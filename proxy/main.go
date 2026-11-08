@@ -1,8 +1,8 @@
 // Command benchscope-proxy sits between the website and the local execution servers.
 //
 // The website sends POST /api/execute with {name, byteCount, fenced, code, language, arch}.
-// The proxy drops language and arch, forwards {name, byteCount, fenced, code} to the local
-// server for that language, and converts the local server's raw results (see schema.go) into the
+// The proxy picks the local server for that language and OS/architecture, forwards
+// {name, byteCount, fenced, code} to it, and converts the local server's raw results (see schema.go) into the
 // shape the website reads.
 package main
 
@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -42,25 +43,42 @@ type LocalRequest struct {
 	Code      string `json:"code"`
 }
 
+// backends maps "language/os/arch" (e.g. "go/linux/amd64") to a local server's execute URL.
+type backends map[string]string
+
+func (b backends) String() string { return fmt.Sprint(map[string]string(b)) }
+
+// Set parses one -backend flag: "go/darwin/arm64=http://192.168.1.20:6969/execute".
+func (b backends) Set(value string) error {
+	key, target, ok := strings.Cut(value, "=")
+	parts := strings.Split(key, "/")
+	if !ok || len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" || target == "" {
+		return errors.New("want language/os/arch=URL, e.g. go/linux/amd64=http://127.0.0.1:6969/execute")
+	}
+	b[strings.ToLower(key)] = target
+	return nil
+}
+
 type proxy struct {
-	backends map[string]string // language -> local server execute URL
+	backends backends
 	client   *http.Client
 	origin   string // value for Access-Control-Allow-Origin; empty disables CORS headers
 }
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
-	goURL := flag.String("go-url", "http://127.0.0.1:6969/execute", "execute URL of the local Go server")
-	pythonURL := flag.String("python-url", "", "execute URL of the local Python server; empty disables Python")
 	origin := flag.String("allow-origin", "*", "origin allowed to call the proxy from a browser; empty disables CORS")
+	// Servers on this machine are configured by default; -backend adds or replaces entries.
+	local := runtime.GOOS + "/" + runtime.GOARCH
+	targets := backends{
+		"go/" + local:     "http://127.0.0.1:6969/execute",
+		"python/" + local: "http://127.0.0.1:6970/execute",
+	}
+	flag.Var(targets, "backend", "language/os/arch=execute URL; repeatable")
 	flag.Parse()
 
-	backends := map[string]string{"go": *goURL}
-	if *pythonURL != "" {
-		backends["python"] = *pythonURL
-	}
 	p := &proxy{
-		backends: backends,
+		backends: targets,
 		// Benchmarks compile and then run for several seconds per sweep combination.
 		client: &http.Client{Timeout: 15 * time.Minute},
 		origin: *origin,
@@ -73,7 +91,7 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		// No WriteTimeout: the response waits for the benchmark to finish.
 	}
-	log.Printf("benchscope proxy listening on %s, backends: %v", *addr, backends)
+	log.Printf("benchscope proxy listening on %s, backends: %v", *addr, targets)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -117,6 +135,7 @@ type ExecutorHealth struct {
 
 type TargetError struct {
 	Language string `json:"language"`
+	Arch     string `json:"arch"` // configured os/arch, e.g. darwin/arm64
 	Message  string `json:"message"`
 }
 
@@ -126,7 +145,7 @@ type Health struct {
 	Unavailable []TargetError    `json:"unavailable"`
 }
 
-func (p *proxy) targetHealth(ctx context.Context, language, endpoint string) (ExecutorHealth, error) {
+func (p *proxy) targetHealth(ctx context.Context, language, arch, endpoint string) (ExecutorHealth, error) {
 	var info ExecutorHealth
 	target, err := url.Parse(endpoint)
 	if err != nil {
@@ -153,6 +172,9 @@ func (p *proxy) targetHealth(ctx context.Context, language, endpoint string) (Ex
 	if info.Status != "ok" || info.Hostname == "" || info.OS == "" || info.Arch == "" || info.CPUs < 1 {
 		return info, fmt.Errorf("incomplete executor health response")
 	}
+	if reported := info.OS + "/" + info.Arch; reported != arch {
+		return info, fmt.Errorf("executor reports %s but is configured as %s", reported, arch)
+	}
 	info.Languages = []string{language}
 	return info, nil
 }
@@ -161,31 +183,34 @@ func (p *proxy) health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	type result struct {
-		language string
-		machine  ExecutorHealth
-		err      error
+		machine ExecutorHealth
+		err     error
 	}
-	results := make(chan result, len(p.backends))
-	for language, endpoint := range p.backends {
+	keys := make([]string, 0, len(p.backends))
+	for key := range p.backends {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	// One slot per backend, filled concurrently, so the response order is stable.
+	results := make([]result, len(keys))
+	done := make(chan struct{})
+	for i, key := range keys {
 		go func() {
-			machine, err := p.targetHealth(ctx, language, endpoint)
-			results <- result{language, machine, err}
+			language, arch, _ := strings.Cut(key, "/")
+			machine, err := p.targetHealth(ctx, language, arch, p.backends[key])
+			results[i] = result{machine, err}
+			done <- struct{}{}
 		}()
 	}
-	byLanguage := map[string]result{}
-	languages := make([]string, 0, len(p.backends))
-	for range p.backends {
-		entry := <-results
-		byLanguage[entry.language] = entry
-		languages = append(languages, entry.language)
+	for range keys {
+		<-done
 	}
-	sort.Strings(languages)
 	health := Health{Status: "ok", Machines: []ExecutorHealth{}, Unavailable: []TargetError{}}
-	for _, language := range languages {
-		entry := byLanguage[language]
+	for i, entry := range results {
 		if entry.err != nil {
+			language, arch, _ := strings.Cut(keys[i], "/")
 			health.Status = "degraded"
-			health.Unavailable = append(health.Unavailable, TargetError{language, entry.err.Error()})
+			health.Unavailable = append(health.Unavailable, TargetError{language, arch, entry.err.Error()})
 		} else {
 			health.Machines = append(health.Machines, entry.machine)
 		}
@@ -210,9 +235,10 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	language := strings.ToLower(strings.TrimSpace(req.Language))
-	target, ok := p.backends[language]
+	arch := strings.ToLower(strings.TrimSpace(req.Arch))
+	target, ok := p.backends[language+"/"+arch]
 	if !ok {
-		fail(w, http.StatusBadRequest, "No local server is configured for language %q.", req.Language)
+		fail(w, http.StatusBadRequest, "No local server is configured for %s on %s.", req.Language, req.Arch)
 		return
 	}
 
@@ -224,11 +250,11 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream.Header.Set("Content-Type", "application/json")
 
-	log.Printf("execute %q (%s, %s) -> %s", req.Name, language, req.Arch, target)
+	log.Printf("execute %q (%s, %s) -> %s", req.Name, language, arch, target)
 	start := time.Now()
 	resp, err := p.client.Do(upstream)
 	if err != nil {
-		fail(w, http.StatusBadGateway, "Could not reach the %s local server at %s: %v", language, target, err)
+		fail(w, http.StatusBadGateway, "Could not reach the %s %s local server at %s: %v", language, arch, target, err)
 		return
 	}
 	defer resp.Body.Close()

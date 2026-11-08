@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"go/format"
 	"io"
@@ -483,11 +484,13 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	addr := flag.String("addr", "127.0.0.1:6969", "listen address; use 0.0.0.0:6969 to accept a proxy on another machine")
+	flag.Parse()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/execute", handleExecution)
 	mux.HandleFunc("GET /health", handleHealth)
 	server := &http.Server{
-		Addr:              "127.0.0.1:6969",
+		Addr:              *addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}

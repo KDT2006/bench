@@ -94,16 +94,15 @@ export async function runBench(query: QueryClient) {
     if (!machine) throw new Error("No execution targets are available.");
     controller.signal.throwIfAborted();
     for (const lane of snapshot.lanes) {
-      const target = machines.find((machine) => machine.languages?.includes(lane.language));
-      if (!target) throw new Error(`Lane ${lane.label}: no ${languages[lane.language]} executor is available.`);
-      if (lane.arch !== target.arch) throw new Error(`Lane ${lane.label}: select the executor architecture (${target.arch}).`);
+      const target = machines.find((machine) => machine.languages?.includes(lane.language) && machine.arch === lane.arch);
+      if (!target) throw new Error(`Lane ${lane.label}: no ${languages[lane.language]} executor is available for ${lane.arch}.`);
     }
     run = { id, workspaceSnapshot: snapshot, machine, machines, status: "building", sweep: unionSweep(snapshot.lanes), rows: [], startedAt: new Date().toISOString() };
     publish({ type: "queued" });
     for (let laneIndex = 0; laneIndex < snapshot.lanes.length; laneIndex++) {
       controller.signal.throwIfAborted();
       let lane = snapshot.lanes[laneIndex];
-      const target = machines.find((machine) => machine.languages?.includes(lane.language))!;
+      const target = machines.find((machine) => machine.languages?.includes(lane.language) && machine.arch === lane.arch)!;
       executingLane = lane;
       run = { ...run, status: "building" };
       const translating = isStale(lane);

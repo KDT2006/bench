@@ -15,11 +15,11 @@ count. On Linux it also reports optional hardware metadata (CPU model, physical
 cores, RAM, kernel, governor and cache instances). The proxy queries this endpoint
 to show the actual execution target's machine details.
 
-To enable Python in the existing proxy, start it in another terminal:
+The proxy routes Python to this server by default. Start it in another terminal:
 
 ```sh
 cd proxy
-go run . -addr 127.0.0.1:8080 -python-url http://127.0.0.1:6970/execute
+go run . -addr 127.0.0.1:8080
 ```
 
 ## HTTP contract
