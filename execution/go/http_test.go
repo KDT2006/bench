@@ -46,6 +46,7 @@ func TestHandleExecutionRejectsInvalidRequests(t *testing.T) {
 		{http.MethodPost, `{"name":"test","code":"#bench","extra":1}`, http.StatusBadRequest},
 		{http.MethodPost, `{"name":"test","code":"#bench"} {}`, http.StatusBadRequest},
 		{http.MethodPost, `{"name":"test","code":"#setup"}`, http.StatusBadRequest},
+		{http.MethodPost, `{"name":"test","code":"#globals\nfunc MOVAllBytesASM(count uint64, data *byte)\n#bench\nMOVAllBytesASM(0, nil)"}`, http.StatusBadRequest},
 		{http.MethodPost, `{"name":"test","code":"#sweep\nn: [bad]\n#bench"}`, http.StatusBadRequest},
 	} {
 		request := httptest.NewRequest(tc.method, "/execute", strings.NewReader(tc.body))

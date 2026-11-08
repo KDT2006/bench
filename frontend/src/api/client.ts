@@ -2,6 +2,7 @@ import { API_BASE_URL } from "./config";
 import type { Example, ExecuteRequest, ExecuteResponse, Lane, Machine, ProxyHealth, Run, ScaffoldResponse } from "./types";
 import { liveRuns, machineFromHealth } from "./live";
 import { exampleFixtures } from "../model/examples";
+import { sourceIssue } from "../model/assembly";
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
@@ -38,7 +39,11 @@ export const getExamples = async (signal?: AbortSignal): Promise<Example[]> => {
   })).filter((example) => example.workspace.lanes.length > 0);
 };
 
-export const execute = (body: ExecuteRequest, signal: AbortSignal) => request<ExecuteResponse>(`${API_BASE_URL}/execute`, post(body, signal));
+export const execute = (body: ExecuteRequest, signal: AbortSignal) => {
+  const issue = sourceIssue(body.code, "code") ?? sourceIssue(body.assembly ?? "", "assembly");
+  if (issue) throw new Error(issue);
+  return request<ExecuteResponse>(`${API_BASE_URL}/execute`, post(body, signal));
+};
 
 export const getRun = async (id: string): Promise<Run> => {
   const run = liveRuns.get(id);

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"profiler"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -98,6 +99,8 @@ func main() {
 `
 
 type ExecutionConfig struct {
+	Assembly      string
+	nativeObject  string // Compiler-produced object linked through cgo.
 	CompilerFlags []string
 	BenchDuration time.Duration // Zero uses the default BenchTime.
 	Name          string
@@ -197,6 +200,18 @@ func PrintBenchmarkResult(out io.Writer, result BenchmarkResult) error {
 // BuildExecutionSource renders a complete Go program. Compile the returned source
 // within a module that resolves the profiler dependency. Sweep is ignored.
 func BuildExecutionSource(cfg ExecutionConfig) (string, error) {
+	if err := validateNativeImplementation(cfg.Globals, cfg.Assembly); err != nil {
+		return "", err
+	}
+	var native nativeBindings
+	if strings.TrimSpace(cfg.Assembly) != "" {
+		var err error
+		native, err = bindNative(cfg.Globals)
+		if err != nil {
+			return "", err
+		}
+		cfg.Globals = native.globals
+	}
 	if cfg.ByteCount < 0 {
 		return "", fmt.Errorf("byte count must be nonnegative")
 	}
@@ -214,7 +229,19 @@ func BuildExecutionSource(cfg ExecutionConfig) (string, error) {
 	if err := tmpl.Execute(&source, cfg); err != nil {
 		return "", fmt.Errorf("render execution template: %w", err)
 	}
-	formatted, err := format.Source(source.Bytes())
+	program := source.String()
+	if strings.TrimSpace(cfg.Assembly) != "" {
+		preamble := "\n/*\n#include <stdint.h>\n" + native.prototypes
+		if cfg.nativeObject != "" {
+			preamble += "#cgo LDFLAGS: " + strconv.Quote(cfg.nativeObject) + "\n"
+		}
+		preamble += "*/\nimport \"C\"\n"
+		if native.unsafe {
+			preamble += "import __bench_asm_unsafe \"unsafe\"\n"
+		}
+		program = strings.Replace(program, "package main\n", "package main\n"+preamble, 1)
+	}
+	formatted, err := format.Source([]byte(program))
 	if err != nil {
 		return "", fmt.Errorf("format execution source: %w", err)
 	}
@@ -258,15 +285,24 @@ func RunExecution(ctx context.Context, cfg ExecutionConfig) (BenchmarkResult, er
 	if err := validateCompilerFlags(cfg.CompilerFlags); err != nil {
 		return BenchmarkResult{}, err
 	}
-	source, err := BuildExecutionSource(cfg)
-	if err != nil {
-		return BenchmarkResult{}, err
-	}
 	dir, err := os.MkdirTemp("", "bench-execution-*")
 	if err != nil {
 		return BenchmarkResult{}, fmt.Errorf("create execution directory: %w", err)
 	}
 	defer os.RemoveAll(dir)
+	if err := validateSourceSize(cfg.Assembly, "assembly"); err != nil {
+		return BenchmarkResult{}, err
+	}
+	if strings.TrimSpace(cfg.Assembly) != "" {
+		cfg.nativeObject, err = compileNative(ctx, dir, cfg.Assembly)
+		if err != nil {
+			return BenchmarkResult{}, err
+		}
+	}
+	source, err := BuildExecutionSource(cfg)
+	if err != nil {
+		return BenchmarkResult{}, err
+	}
 	sourcePath := filepath.Join(dir, "main.go")
 	executablePath := filepath.Join(dir, "benchmark.exe")
 	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
@@ -345,6 +381,7 @@ func BuildSweepMatrix(sweep string) ([]string, [][]int, error) {
 
 // ExecutionRequest is the JSON payload accepted by POST /execute.
 type ExecutionRequest struct {
+	Assembly      string   `json:"assembly,omitempty"`
 	CompilerFlags []string `json:"compilerFlags,omitempty"`
 	Name          string   `json:"name"`
 	ByteCount     int      `json:"byteCount"`
@@ -354,11 +391,18 @@ type ExecutionRequest struct {
 
 // ParseExecutionConfig separates directive blocks without changing their Go code.
 func ParseExecutionConfig(request ExecutionRequest) (ExecutionConfig, error) {
+	if err := validateSourceSize(request.Code, "code"); err != nil {
+		return ExecutionConfig{}, err
+	}
+	if err := validateSourceSize(request.Assembly, "assembly"); err != nil {
+		return ExecutionConfig{}, err
+	}
 	if err := validateCompilerFlags(request.CompilerFlags); err != nil {
 		return ExecutionConfig{}, err
 	}
 	cfg := ExecutionConfig{
-		Name: request.Name, ByteCount: request.ByteCount, Fenced: request.Fenced, CompilerFlags: append([]string(nil), request.CompilerFlags...),
+		Assembly: request.Assembly,
+		Name:     request.Name, ByteCount: request.ByteCount, Fenced: request.Fenced, CompilerFlags: append([]string(nil), request.CompilerFlags...),
 	}
 	if strings.TrimSpace(request.Name) == "" {
 		return ExecutionConfig{}, fmt.Errorf("name is required")
@@ -409,6 +453,17 @@ func ParseExecutionConfig(request ExecutionRequest) (ExecutionConfig, error) {
 	}
 	if !seen["#bench"] {
 		return ExecutionConfig{}, fmt.Errorf("#bench directive is required")
+	}
+	if err := validateNativeImplementation(cfg.Globals, cfg.Assembly); err != nil {
+		return ExecutionConfig{}, err
+	}
+	if strings.TrimSpace(cfg.Assembly) != "" {
+		if err := nativePlatform(); err != nil {
+			return ExecutionConfig{}, err
+		}
+		if _, err := bindNative(cfg.Globals); err != nil {
+			return ExecutionConfig{}, err
+		}
 	}
 	return cfg, nil
 }

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bench.it — demo intro</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; color: #e7eaee; background: #12151a; }
+    body { margin: 0; }
+    .slide { position: relative; width: 1600px; height: 900px; padding: 64px 88px; background: #1a1d23; overflow: hidden; transform-origin: top left; }
+    .slide[hidden] { display: none; }
+    .brand { font-size: 32px; font-weight: 700; letter-spacing: -1.3px; }
+    .brand b { color: #e6a23c; }
+    .eyebrow { margin-top: 100px; font: 18px monospace; letter-spacing: 3px; color: #a7b1bf; }
+    h1 { margin: 23px 0 26px; font-size: 91px; line-height: 1.04; letter-spacing: -4px; font-weight: 700; }
+    h1 em { color: #e6a23c; font-style: normal; }
+    .subtitle { margin: 0; font-size: 32px; line-height: 1.4; color: #bdc6d2; }
+    .steps { display: flex; gap: 24px; margin-top: 76px; }
+    .problem { flex: 1; border-top: 2px solid #414957; padding-top: 23px; font-size: 26px; }
+    .problem span { display: inline-block; margin-right: 16px; font: 18px monospace; color: #e6a23c; }
+    footer { position: absolute; bottom: 46px; left: 88px; right: 88px; display: flex; justify-content: space-between; font-size: 17px; color: #a7b1bf; }
+    .solution .eyebrow { margin-top: 63px; }
+    .solution h1 { font-size: 73px; line-height: 1.09; margin-bottom: 0; }
+    .flow { display: flex; align-items: stretch; gap: 22px; margin-top: 47px; }
+    .card { flex: 1; min-width: 0; background: #242a33; border: 1px solid #414957; border-top: 4px solid #e6a23c; border-radius: 9px; padding: 27px 28px; height: 202px; }
+    .card:nth-of-type(2) { border-top-color: #5db7ea; }
+    .card:nth-of-type(3) { border-top-color: #7bc9ad; }
+    .card .number { font: 16px monospace; color: #bdc6d2; letter-spacing: 2px; }
+    .card h2 { font-size: 35px; letter-spacing: -1px; margin: 19px 0 12px; }
+    .card p { font-size: 22px; line-height: 1.4; color: #bdc6d2; margin: 0; }
+    .uses { display: flex; gap: 44px; font-size: 22px; margin-top: 38px; color: #bdc6d2; }
+    .uses span::before { content: ''; display: inline-block; width: 7px; height: 7px; margin: 0 12px 4px 0; background: #e6a23c; border-radius: 50%; }
+    @page { size: 1600px 900px; margin: 0; }
+    @media print {
+      body { background: #1a1d23; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .slide, .slide[hidden] { display: block !important; transform: none !important; break-after: page; }
+      .slide:last-child { break-after: auto; }
+    }
+  </style>
+</head>
+<body>
+  <section class="slide" aria-label="Slide 1: The problem">
+    <div class="brand">Bench<b>.it</b></div>
+    <div class="eyebrow">THE PERFORMANCE QUESTION</div>
+    <h1>Which version is<br><em>actually faster?</em></h1>
+    <p class="subtitle">AI can write the code.<br>You still need the experiment.</p>
+    <div class="steps">
+      <div class="problem"><span>01</span>Build the benchmark</div>
+      <div class="problem"><span>02</span>Isolate the work</div>
+      <div class="problem"><span>03</span>Compare the evidence</div>
+    </div>
+    <footer><span>From performance questions to measured answers.</span><span>01 / 02</span></footer>
+  </section>
+  <section class="slide solution" hidden aria-label="Slide 2: Bench.it">
+    <div class="brand">Bench<b>.it</b></div>
+    <div class="eyebrow">A WORKBENCH FOR PERFORMANCE EXPERIMENTS</div>
+    <h1>Turn a question<br>into a <em>measurement.</em></h1>
+    <div class="flow">
+      <article class="card"><div class="number">01 / DESCRIBE</div><h2>Define the work.</h2><p>Operation + input sizes</p></article>
+      <article class="card"><div class="number">02 / GENERATE</div><h2>Inspect the code.</h2><p>Benchmark code from Gemini</p></article>
+      <article class="card"><div class="number">03 / MEASURE</div><h2>See the evidence.</h2><p>Connected hardware + visual results</p></article>
+    </div>
+    <div class="uses"><span>Compare implementations</span><span>Investigate performance</span><span>Teach CPU behavior</span></div>
+    <footer><span>Before you optimize, measure.</span><span>02 / 02</span></footer>
+  </section>
+  <script>
+    const slides = [...document.querySelectorAll('.slide')];
+    let current = 0;
+    function resize() {
+      const scale = Math.min(innerWidth / 1600, innerHeight / 900);
+      for (const slide of slides) {
+        slide.style.transform = `scale(${scale})`;
+        slide.style.position = 'absolute';
+        slide.style.left = `${(innerWidth - 1600 * scale) / 2}px`;
+        slide.style.top = `${(innerHeight - 900 * scale) / 2}px`;
+      }
+    }
+    function show(index) {
+      current = Math.max(0, Math.min(slides.length - 1, index));
+      slides.forEach((slide, i) => { slide.hidden = i !== current; });
+    }
+    addEventListener('keydown', event => {
+      if (['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(event.key)) { event.preventDefault(); show(current + 1); }
+      if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) { event.preventDefault(); show(current - 1); }
+      if (event.key.toLowerCase() === 'f') {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen().catch(() => {});
+      }
+    });
+    addEventListener('resize', resize);
+    addEventListener('beforeprint', () => slides.forEach(s => { s.style.position = 'relative'; s.style.left = '0'; s.style.top = '0'; }));
+    addEventListener('afterprint', resize);
+    resize();
+  </script>
+</body>
+</html>

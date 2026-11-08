@@ -13,6 +13,13 @@ from execution.py.execution import (
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_positional_config_remains_compatible(self):
+        cfg = ExecutionConfig(0.001, "positional config", 8, True)
+        self.assertEqual((cfg.BenchDuration, cfg.Name, cfg.ByteCount, cfg.Fenced, cfg.Assembly),
+                         (0.001, "positional config", 8, True, ""))
+        cfg.Bench = "pass"
+        self.assertGreater(RunExecution(cfg)["iterations"], 0)
+
     def test_directives_preserve_python_comments_strings_and_indentation(self):
         cfg = ParseExecutionConfig({
             "name": "example", "byteCount": 8, "fenced": True,

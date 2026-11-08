@@ -69,6 +69,14 @@ Sweeps accept integer JSON lists and form a Cartesian product, with up to 256 co
 
 The generated harness tab contains executable directive-separated code, not a standalone program. **Edit as code** allows editing those same sections directly. Setup and cleanup run for every iteration, outside the timed bench section. Sweep parameters are injected before setup. Go imports are import specifications; the harness already provides `encoding/json`, `fmt`, `os`, `profiler`, and `time`.
 
+The **native.asm** (x64) / **native.S** (ARM64) tab accepts native assembly using
+the host C ABI. **Load NOP example** creates MOV, NOP, CMP and DEC routines with
+matching declarations. x64 uses NASM (`nasm` must be installed on the executor);
+existing GNU/Clang assembly remains supported. Examples contain no platform macros.
+Go binds bodyless functions through cgo; Python binds typed pass/ellipsis stubs
+through ctypes. Code and assembly each accept up to 65,536 Unicode characters.
+See [native assembly examples and setup](../execution/ASSEMBLY.md).
+
 The executor controls the run window (currently ten seconds per combination). Each lane has a compact compiler/interpreter options field: Go accepts build flags such as `-gcflags="all=-N -l" -trimpath`, and Python accepts interpreter flags such as `-OO -B`. Quoting groups arguments; no shell expansion is performed. Options are sent as a `compilerFlags` string array through the proxy and applied to every sweep combination. Empty options use server defaults. Invalid or unsupported options report an error. Run snapshots retain the options used.
 
 Lanes use their executor's architecture. Bytes per iteration and fenced timing are sent with each request; a zero byte count leaves throughput unavailable. Toolchain selection, environment overrides and runner controls in the **Options** drawer remain saved settings and are not applied yet.

@@ -66,6 +66,11 @@ For example: `"compilerFlags":["-gcflags=all=-N -l","-trimpath"]` for Go, or
 `"compilerFlags":["-OO","-B"]` for Python. Omit it or send `[]` to use defaults.
 Each request accepts up to 64 nonempty arguments, at most 4096 bytes each.
 
+The optional `assembly` string contains native x64 NASM or x64/ARM64 GNU/Clang source, forwarded
+unchanged to the executor. `code` and `assembly` each accept up to 65,536 Unicode
+characters and reject NUL characters; the full JSON body is limited to 1 MiB.
+See [native assembly declarations, ABI and toolchains](../execution/ASSEMBLY.md).
+
 Go supports `-gcflags`, `-asmflags`, `-ldflags`, `-tags`, `-pgo`, `-buildvcs`,
 `-race`, `-msan`, `-asan`, `-trimpath`, `-cover`, `-covermode`, `-coverpkg`,
 `-a`, `-v` and `-x`. Value flags accept either `-flag=value` or separate arguments.

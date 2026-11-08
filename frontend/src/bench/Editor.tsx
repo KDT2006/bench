@@ -15,6 +15,7 @@ import { parseSweep } from "../model/sweep";
 import { sectionPattern } from "../model/sections";
 import { usePreferences } from "../shell/preferences";
 import { editorFlushes } from "./editorSync";
+import { sourceIssue } from "../model/assembly";
 
 const section = sectionPattern;
 const dslLanguage = StreamLanguage.define({
@@ -102,7 +103,18 @@ const dslExtras = [
   }),
 ];
 
+const assemblyLanguage = StreamLanguage.define({
+  token(stream) {
+    if (stream.match(/\/\/.*|;.*|\/\*.*?\*\//)) return "comment";
+    if (stream.sol() && stream.match(/\s*(?:#(?:if|ifdef|ifndef|else|elif|endif|define|include)\b.*|(?:global|extern|section|segment|bits|default|db|dw|dd|dq)\b)/i)) return "keyword";
+    if (stream.match(/"(?:[^"\\]|\\.)*"/)) return "string";
+    if (stream.match(/(?:0x[\da-f]+|\b\d+)\b/i)) return "number";
+    if (stream.match(/\.[A-Za-z_]\w*/)) return "keyword";
+    stream.next(); return null;
+  },
+});
 const language = (file: FileName): Extension => file === "benchmark.perf" ? dslExtras
+  : file === "native.S" || file === "native.asm" ? assemblyLanguage
   : file === "harness.go" ? [go(), rulePlugin, sectionFolding] : [python(), rulePlugin, sectionFolding];
 
 interface Props {
@@ -148,6 +160,10 @@ export default function Editor({ file, value, label, readOnly = false, onChange,
         keymap.of([...closeBracketsKeymap, ...defaultKeymap.filter((binding) => binding.key !== "Mod-Enter"), ...historyKeymap, ...foldKeymap]),
         syntaxHighlighting(style), language(file),
         EditorView.contentAttributes.of({ "aria-label": label, spellcheck: "false" }),
+        linter((current) => {
+          const issue = sourceIssue(current.state.doc.toString(), file);
+          return issue ? [{ from: 0, to: 0, severity: "error", message: issue }] : [];
+        }),
         ...(file === "benchmark.perf" ? [linter((current) => diagnostics(current.state.doc.toString()).map((issue) => {
           const line = current.state.doc.line(Math.max(1, Math.min(issue.line, current.state.doc.lines)));
           return { from: line.from, to: line.to, severity: "error", message: issue.message };
