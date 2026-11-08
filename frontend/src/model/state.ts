@@ -28,7 +28,7 @@ export function validWorkspace(value: unknown): value is Workspace {
 }
 const draft = readLocal<unknown>(draftKey, null);
 const layoutKey = "benchscope-layout-v1";
-interface Layout { panel: Panel; collapsed: boolean; grid: boolean; height: number; widths: Record<string, number> }
+interface Layout { panel: Panel; collapsed: boolean; height: number; widths: Record<string, number> }
 
 interface BenchState {
   workspace: Workspace;
@@ -50,7 +50,7 @@ export const useBench = create<BenchState>((set) => ({
   workspace: validWorkspace(draft) ? draft : starterWorkspace(),
   dirty: false, active: null, lastRun: null, pending: false,
   generating: [], notice: null,
-  layout: { panel: "sweep", collapsed: false, grid: false, height: 360, widths: {}, ...readLocal<Partial<Layout>>(layoutKey, {}) },
+  layout: { panel: "sweep", collapsed: false, height: 360, widths: {}, ...readLocal<Partial<Layout>>(layoutKey, {}) },
   setWorkspace: (workspace, dirty = false) => set({ workspace, dirty }),
   edit: (change) => set((state) => ({
     workspace: { ...change(state.workspace), updatedAt: new Date().toISOString() }, dirty: true,

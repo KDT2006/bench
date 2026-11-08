@@ -40,8 +40,15 @@ export function formatMetric(metric: Metric, value: number | undefined) {
   return metric === "timeNs" ? time(value) : metric === "throughput" ? `${num.format(value)} GiB/s` : num.format(value);
 }
 
-/** Line number from a Go compiler (`harness.go:12:5:`) or Python (`line 12`) diagnostic. */
+export function assemblyErrorLine(log: string) {
+  const match = /\bnative\.(?:S|asm):(\d+):/.exec(log);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** Line number from a native assembler, Go compiler or Python diagnostic. */
 export function buildErrorLine(log: string) {
+  const assembly = assemblyErrorLine(log);
+  if (assembly !== undefined) return assembly;
   const match = /\.(?:go|py):(\d+):|\bline (\d+)\b/.exec(log);
   return match ? Number(match[1] ?? match[2]) : undefined;
 }

@@ -6,6 +6,12 @@ Python 3.10+ and the standard library are sufficient. Run from the repository ro
 python3 -m execution.py.main
 ```
 
+Native assembly benchmarks additionally need GCC or Clang, and NASM for x64
+NASM sources. Supply native assembly source in
+the optional `assembly` field and typed skeleton functions in `#globals`; see
+[native assembly examples and ABI details](../ASSEMBLY.md). Code and assembly
+each accept at most 65,536 Unicode characters.
+
 The local server listens at `http://127.0.0.1:6970/execute`. Override the address
 with `--host` and `--port`. It executes submitted Python in the current user's
 environment, so it is intended for trusted local benchmark code.

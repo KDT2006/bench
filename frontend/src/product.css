@@ -337,8 +337,6 @@
   @media (1024px <= width < 1200px) {
     .run-shortcut { display: none; }
     .lane-wrap { min-width: 0; }
-    .lanes-many { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .lanes-many .lane-resizer { display: none; }
   }
   @media (width < 1280px) {
     .result-chart-grid { grid-template-columns: minmax(0, 1fr); }

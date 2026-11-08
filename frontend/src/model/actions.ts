@@ -10,6 +10,7 @@ import { diagnostics } from "./dsl";
 import { buildErrorLine, harness, languages, num } from "./format";
 import { saveDraft, useBench } from "./state";
 import { compilerFlags } from "./compilerOptions";
+import { assemblyFile, assemblySource, sourceIssue } from "./assembly";
 
 const state = useBench.getState;
 const message = (error: unknown) => error instanceof Error ? error.message : "The request failed. Try again.";
@@ -68,6 +69,10 @@ export async function runBench(query: QueryClient) {
   const snapshot = structuredClone(current.workspace);
   snapshot.title = snapshot.title.trim() || "Untitled bench";
   for (const lane of snapshot.lanes) {
+    for (const file of ["benchmark.perf", harness(lane.language), assemblyFile(lane)] as const) {
+      const issue = sourceIssue(lane.files[file] ?? "", file);
+      if (issue) return current.notify({ text: `Lane ${lane.label}: ${issue}`, error: true });
+    }
     try { compilerFlags(lane.build); } catch (error) {
       return current.notify({ text: `Lane ${lane.label}: ${message(error)}`, error: true });
     }
@@ -124,6 +129,7 @@ export async function runBench(query: QueryClient) {
         const response = await execute({
           name: `${snapshot.title} · Lane ${lane.label}`, byteCount: lane.execution?.byteCount ?? 0, fenced: lane.execution?.fenced ?? true,
           language: lane.language, arch: `${target.os}/${target.arch === "x86_64" ? "amd64" : "arm64"}`, compilerFlags: compilerFlags(lane.build),
+          assembly: assemblySource(lane),
           code: assembleSections({ ...document.sections, sweep: serializeSweep(Object.entries(params).map(([name, value]) => ({ name, values: [value] }))) }),
         }, controller.signal);
         controller.signal.throwIfAborted();
@@ -143,7 +149,7 @@ export async function runBench(query: QueryClient) {
     if (run) {
       run = { ...run, status: cancelled ? "cancelled" : "failed", finishedAt: new Date().toISOString() };
       // Only compiler diagnostics count as a build failure; anything else (proxy down, Gemini quota, executor 502) is an infrastructure error.
-      if (!cancelled && executingLane && buildErrorLine(detail) !== undefined) publish({ type: "build_done", laneId: executingLane.id, ok: false, log: detail });
+      if (!cancelled && executingLane && (buildErrorLine(detail) !== undefined || /compile native assembly|compile benchmark|native assembly requires/.test(detail))) publish({ type: "build_done", laneId: executingLane.id, ok: false, log: detail });
       publish(cancelled ? { type: "done" } : { type: "error", message: text, laneId: executingLane?.id });
     } else useBench.setState({ active: null });
     if (!cancelled) state().setLayout({ panel: "build" });

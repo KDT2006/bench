@@ -15,6 +15,7 @@ import { resultsCsv } from "../model/resultsCsv";
 import { resultColumns } from "../model/resultColumns";
 import { compilerOptionsText } from "../model/compilerOptions";
 import { EditorSkeleton } from "../bench/Workbench";
+import { assemblyFile } from "../model/assembly";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const Editor = lazy(() => import("../bench/Editor"));
@@ -175,7 +176,7 @@ function RunConfiguration({ run }: { run: Run }) {
         <div><dt>Bytes per iteration</dt><dd>{lane.execution?.byteCount ?? 0}</dd></div><div><dt>Fenced timing</dt><dd>{(lane.execution?.fenced ?? true) ? "On" : "Off"}</dd></div>
         {lane.scaffold && <div><dt>Scaffold model</dt><dd>{lane.scaffold.model}</dd></div>}
       </dl>
-      {(["benchmark.perf", harness(lane.language)] as FileName[]).map((file) => lane.files[file] !== undefined && <details key={file} className="snapshot-file"><summary><code>{file}</code></summary><div className="read-editor"><Suspense fallback={<EditorSkeleton />}><Editor file={file} value={lane.files[file]!} label={`Lane ${lane.label} snapshot ${file}`} readOnly /></Suspense></div></details>)}</div>
+      {(["benchmark.perf", harness(lane.language), assemblyFile(lane)] as FileName[]).map((file) => lane.files[file] !== undefined && <details key={file} className="snapshot-file"><summary><code>{file}</code></summary><div className="read-editor"><Suspense fallback={<EditorSkeleton />}><Editor file={file} value={lane.files[file]!} label={`Lane ${lane.label} snapshot ${file}`} readOnly /></Suspense></div></details>)}</div>
     </details>)}</div>
     <details className="snapshot-details"><summary>Execution target snapshots</summary><p className="help-text">Captured for this run.</p><>{(run.machines ?? [run.machine]).map((machine, index) => <MachineDetails key={`${machine.id}-${index}`} machine={machine} />)}</></details>
   </section>;

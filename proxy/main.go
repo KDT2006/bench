@@ -22,12 +22,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const bodyLimit = 1 << 20 // 1 MiB
+const sourceCharLimit = 65536
 
 // ExecuteRequest is what the website sends to the proxy.
 type ExecuteRequest struct {
+	Assembly      string   `json:"assembly,omitempty"`
 	CompilerFlags []string `json:"compilerFlags,omitempty"`
 	Name          string   `json:"name"`
 	ByteCount     int64    `json:"byteCount"`
@@ -39,6 +42,7 @@ type ExecuteRequest struct {
 
 // LocalRequest is what the proxy sends to a local execution server.
 type LocalRequest struct {
+	Assembly      string   `json:"assembly,omitempty"`
 	CompilerFlags []string `json:"compilerFlags,omitempty"`
 	Name          string   `json:"name"`
 	ByteCount     int64    `json:"byteCount"`
@@ -275,7 +279,7 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, _ := json.Marshal(LocalRequest{CompilerFlags: req.CompilerFlags, Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
+	body, _ := json.Marshal(LocalRequest{Assembly: req.Assembly, CompilerFlags: req.CompilerFlags, Name: req.Name, ByteCount: req.ByteCount, Fenced: req.Fenced, Code: req.Code})
 	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "Could not build the request to the local server: %v", err)
@@ -327,6 +331,14 @@ func (p *proxy) execute(w http.ResponseWriter, r *http.Request) {
 }
 
 func validate(req ExecuteRequest) string {
+	for _, source := range []struct{ name, text string }{{"code", req.Code}, {"assembly", req.Assembly}} {
+		if utf8.RuneCountInString(source.text) > sourceCharLimit {
+			return source.name + " must be at most 65536 characters."
+		}
+		if strings.ContainsRune(source.text, 0) {
+			return source.name + " must not contain NUL characters."
+		}
+	}
 	if len(req.CompilerFlags) > 64 {
 		return "compilerFlags must contain at most 64 arguments."
 	}

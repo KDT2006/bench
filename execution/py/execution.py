@@ -12,10 +12,12 @@ import subprocess
 import sys
 import tempfile
 import tokenize
+from time import monotonic
 from dataclasses import dataclass, field, replace
 from typing import TextIO
 
 from .compiler_options import validate_compiler_flags
+from .assembly import bind_native, compile_native, native_platform, validate_source
 
 BenchTime = 10.0  # Seconds; the wire format uses nanoseconds.
 ExecutionTimeout = 120.0  # Per sweep combination, including interpreter startup.
@@ -46,28 +48,30 @@ class ExecutionConfig:
     Bench: str = ""
     Cleanup: str = ""
     CompilerFlags: list[str] = field(default_factory=list)
+    Assembly: str = ""
 
 
 def ParseExecutionConfig(request: dict) -> ExecutionConfig:
     """Split directive blocks while preserving Python comments and indentation."""
     if not isinstance(request, dict):
         raise ValueError("body must contain one JSON object")
-    unknown = request.keys() - {"name", "byteCount", "fenced", "code", "compilerFlags"}
+    unknown = request.keys() - {"name", "byteCount", "fenced", "code", "compilerFlags", "assembly"}
     if unknown:
         raise ValueError(f"unknown request field: {sorted(unknown)[0]}")
     name = request.get("name", "")
     byte_count = request.get("byteCount", 0)
     fenced = request.get("fenced", False)
     code = request.get("code", "")
+    assembly = request.get("assembly", "")
+    validate_source(code, "code")
+    validate_source(assembly, "assembly")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("name is required")
     if type(byte_count) is not int or not 0 <= byte_count <= (1 << 63) - 1:
         raise ValueError("byteCount must be a nonnegative signed 64-bit integer")
     if type(fenced) is not bool:
         raise ValueError("fenced must be a boolean")
-    if not isinstance(code, str):
-        raise ValueError("code must be a string")
-    cfg = ExecutionConfig(Name=name, ByteCount=byte_count, Fenced=fenced, CompilerFlags=validate_compiler_flags(request.get("compilerFlags", [])))
+    cfg = ExecutionConfig(Assembly=assembly, Name=name, ByteCount=byte_count, Fenced=fenced, CompilerFlags=validate_compiler_flags(request.get("compilerFlags", [])))
     blocks = {"#" + name.lower(): name for name in
               ("Imports", "Globals", "Sweep", "Setup", "Bench", "Cleanup")}
     code = code.replace("\r\n", "\n")
@@ -97,6 +101,12 @@ def ParseExecutionConfig(request: dict) -> ExecutionConfig:
             raise ValueError(f"line {number}: code must follow a directive")
     if "#bench" not in seen:
         raise ValueError("#bench directive is required")
+    if assembly.strip():
+        native_platform()
+        try:
+            bind_native(cfg.Globals, "native.so")
+        except SyntaxError as exc:
+            raise ValueError(f"native assembly declarations: {exc}") from exc
     return cfg
 
 
@@ -127,7 +137,7 @@ def BuildSweepMatrix(sweep: str) -> tuple[list[str], list[list[int]]]:
     return variables, matrix
 
 
-def BuildExecutionSource(cfg: ExecutionConfig) -> str:
+def BuildExecutionSource(cfg: ExecutionConfig, native_library="native.so") -> str:
     """Render a standalone program. Sweep expansion belongs to RunSweep."""
     if cfg.ByteCount < 0:
         raise ValueError("byte count must be nonnegative")
@@ -145,7 +155,7 @@ def BuildExecutionSource(cfg: ExecutionConfig) -> str:
             "from execution.py.execution import _run_profile as __bench_run_profile\n"
         )
         program.body.extend(statements(cfg.Imports))
-        program.body.extend(statements(cfg.Globals))
+        program.body.extend(statements(bind_native(cfg.Globals, native_library) if cfg.Assembly.strip() else cfg.Globals))
         iteration = ast.parse(
             "def __bench_iteration(__bench_measure):\n"
             "    with __bench_measure:\n"
@@ -221,8 +231,14 @@ def ParseBenchmarkResult(stdout: TextIO) -> dict:
 def RunExecution(cfg: ExecutionConfig, timeout: float = ExecutionTimeout) -> dict:
     """Run a fresh interpreter, kill it on timeout, and remove temporary files."""
     flags = validate_compiler_flags(cfg.CompilerFlags)
-    source = BuildExecutionSource(cfg)
+    validate_source(cfg.Assembly, "assembly")
+    deadline = monotonic() + timeout
     with tempfile.TemporaryDirectory(prefix="bench-python-") as directory:
+        try:
+            library = compile_native(directory, cfg.Assembly, timeout) if cfg.Assembly.strip() else "native.so"
+        except ValueError as exc:
+            raise ExecutionError(str(exc)) from exc
+        source = BuildExecutionSource(cfg, library)
         source_path = Path(directory) / "benchmark.py"
         source_path.write_text(source, encoding="utf-8")
         # Spool user output to disk so verbose benchmarks do not fill RAM.
@@ -231,7 +247,7 @@ def RunExecution(cfg: ExecutionConfig, timeout: float = ExecutionTimeout) -> dic
             try:
                 process = subprocess.run(
                     [sys.executable, *flags, "-u", str(source_path)],
-                    stdout=stdout, stderr=stderr, timeout=timeout, check=False,
+                    stdout=stdout, stderr=stderr, timeout=max(0.001, deadline - monotonic()), check=False,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise TimeoutError(f"benchmark exceeded {timeout:g} seconds") from exc

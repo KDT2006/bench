@@ -16,6 +16,75 @@ after(async () => { await server?.close(); });
 const gemini = (sections) => Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(sections) }] } }] });
 const sections = (bench) => ({ imports: "", globals: "var result int", setup: "", bench, cleanup: "", warnings: [] });
 
+test("native examples retain skeletons, target syntax and Unicode limits", async () => {
+  const { assemblyExample, sourceIssue, SOURCE_CHAR_LIMIT } = await load("/src/model/assembly.ts");
+  const { parseSections } = await load("/src/model/sections.ts");
+  for (const language of ["go", "python"]) for (const arch of ["x86_64", "arm64"]) for (const os of ["linux", "darwin"]) {
+    const example = assemblyExample(language, arch, os);
+    const parsed = parseSections(example.code);
+    assert.deepEqual(parsed.errors, []);
+    assert.match(parsed.sections.globals, language === "go" ? /func NOPAllBytesASM\(count uint64\)/ : /def NOPAllBytesASM\(count: ctypes.c_uint64\) -> None:/);
+    assert.match(parsed.sections.bench, /NOPAllBytesASM\(/);
+    assert.equal(example.file, arch === "x86_64" ? "native.asm" : "native.S");
+    assert.doesNotMatch(example.assembly, /#ifdef|#define|SYMBOL\(|GNU-stack|intel_syntax/);
+    for (const routine of ["MOVAllBytesASM", "NOPAllBytesASM", "CMPAllBytesASM", "DECAllBytesASM"]) {
+      assert.match(example.assembly, new RegExp(`^${arch === "arm64" && os === "darwin" ? "_" : ""}${routine}:`, "m"));
+    }
+    if (arch === "x86_64") {
+      assert.match(example.assembly, /global NOPAllBytesASM/);
+      assert.match(example.assembly, /section \.text/);
+      assert.match(example.assembly, /db 0x0f, 0x1f, 0x00 ;/);
+      assert.match(example.assembly, /mov \[rsi \+ rax\], al/);
+      assert.doesNotMatch(example.assembly, /\brcx\b|\brdx\b/);
+    } else assert.match(example.assembly, /cbz x0/);
+    assert.equal(sourceIssue(example.assembly, "assembly"), undefined);
+  }
+  assert.equal(sourceIssue("🦊".repeat(SOURCE_CHAR_LIMIT), "assembly"), undefined);
+  assert.match(sourceIssue("x".repeat(SOURCE_CHAR_LIMIT + 1), "assembly"), /65,536/);
+  assert.match(sourceIssue("\0", "assembly"), /NUL/);
+});
+
+test("assembly files retain existing GAS drafts and use NASM for new x64 lanes", async () => {
+  const { assemblyFile, assemblySource } = await load("/src/model/assembly.ts");
+  assert.equal(assemblyFile({ arch: "x86_64", files: {} }), "native.asm");
+  assert.equal(assemblyFile({ arch: "arm64", files: {} }), "native.S");
+  const existing = { arch: "x86_64", files: { "native.S": ".text\n.globl F" } };
+  assert.equal(assemblyFile(existing), "native.S");
+  assert.equal(assemblySource(existing), existing.files["native.S"]);
+  const nasm = { arch: "x86_64", files: { "native.asm": "global F\nsection .text" } };
+  assert.equal(assemblySource(nasm), nasm.files["native.asm"]);
+  const mixedDraft = { ...existing, files: { ...existing.files, "native.asm": " \n" } };
+  assert.equal(assemblyFile(mixedDraft), "native.S");
+  assert.equal(assemblySource(mixedDraft), existing.files["native.S"]);
+  assert.equal(assemblySource({ ...nasm, files: { ...nasm.files, "native.S": "" } }), nasm.files["native.asm"]);
+});
+
+test("native assembler diagnostics navigate to native.S", async () => {
+  const { assemblyErrorLine, buildErrorLine } = await load("/src/model/format.ts");
+  const message = "compile native assembly: exit status 1\n/tmp/benchmark/native.S:12: Error: unknown instruction";
+  assert.equal(assemblyErrorLine(message), 12);
+  assert.equal(buildErrorLine(message), 12);
+  assert.equal(assemblyErrorLine("compile native assembly (NASM):\n/tmp/native.asm:9: error: parser: instruction expected"), 9);
+  assert.equal(assemblyErrorLine("main.go:8:3: undefined function"), undefined);
+  assert.equal(buildErrorLine("main.go:8:3: undefined function"), 8);
+});
+
+test("execution client forwards native assembly unchanged", async () => {
+  const { execute } = await load("/src/api/client.ts");
+  const original = globalThis.fetch;
+  const payload = { name: "native", code: "#globals\nfunc MultiNOP(count uint64)\n#bench\nMultiNOP(9)",
+    assembly: "#define SYMBOL(name) name\n.text\n.globl SYMBOL(MultiNOP)\nSYMBOL(MultiNOP):\nret\n",
+    language: "go", arch: "linux/amd64", byteCount: 0, fenced: true };
+  try {
+    globalThis.fetch = async (_url, options) => {
+      assert.deepEqual(JSON.parse(options.body), payload);
+      return Response.json({ results: [] });
+    };
+    await execute(payload, new AbortController().signal);
+    assert.throws(() => execute({ ...payload, assembly: "x".repeat(65537) }, new AbortController().signal), /65,536/);
+  } finally { globalThis.fetch = original; }
+});
+
 test("Gemini receives benchmark parameters and returns assembled sections", async () => {
   const { createGeminiScaffold } = await load("/server/gemini.ts");
   let calls = 0;

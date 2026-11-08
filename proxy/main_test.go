@@ -313,3 +313,36 @@ func TestExecuteForwardsCompilerFlagsWithoutSplitting(t *testing.T) {
 		t.Fatalf("%d: %s", response.Code, response.Body.String())
 	}
 }
+
+func TestAssemblyForwardingAndLimits(t *testing.T) {
+	assembly := "#ifdef __APPLE__\n.globl _Native\n#endif\n.text\nNative:\n ret\n"
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload LocalRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if payload.Assembly != assembly {
+			t.Errorf("assembly changed: %q", payload.Assembly)
+		}
+		io.WriteString(w, localBody)
+	}))
+	defer target.Close()
+	var request map[string]any
+	json.Unmarshal([]byte(validBody), &request)
+	request["assembly"] = assembly
+	body, _ := json.Marshal(request)
+	if response := post(t, newTestProxy(target.URL), string(body)); response.Code != http.StatusOK {
+		t.Fatalf("%d: %s", response.Code, response.Body.String())
+	}
+	for _, field := range []string{"code", "assembly"} {
+		for _, value := range []string{strings.Repeat("x", sourceCharLimit+1), "\x00"} {
+			request[field] = value
+			body, _ := json.Marshal(request)
+			response := post(t, newTestProxy(target.URL), string(body))
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), field) {
+				t.Fatalf("%s limit: %d %s", field, response.Code, response.Body)
+			}
+		}
+		request[field] = "#bench\n"
+	}
+}

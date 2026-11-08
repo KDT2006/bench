@@ -19,6 +19,7 @@ const sections = [
   { id: "reading-results", title: "Reading results", copy: "Use the minimum time to estimate the cost with fewer interruptions. Mean and maximum show how much the other iterations varied. Normalize by a size parameter to compare work per element." },
   { id: "pitfalls", title: "Pitfalls", copy: "Compiler elimination, cold caches, page faults, garbage collection, and Python interpreter overhead can change what a short benchmark measures." },
   { id: "code-mode", title: "Writing ejected harnesses", copy: "Choose Edit as code to edit the harness directly. Edit sweep inputs separately in the Sweep tab. Code mode uses the same six directive sections with executable code; the executor injects the sweep values before #setup." },
+  { id: "native-assembly", title: "Native assembly", copy: "Open native.asm (x64) or native.S (ARM64) and choose Load NOP example to start a native benchmark. The example includes MOV, NOP, CMP and DEC loops; call the routine you want in #bench. Declare assembly functions in #globals in code mode. Each code and assembly field accepts up to 65,536 Unicode characters. Assembly is saved, duplicated and exported with the lane." },
 ];
 
 const directiveCopy: Record<Directive, string> = {
@@ -84,6 +85,15 @@ export default function Guide() {
           {section.id === "directives" && <dl className="directive-list">{directives.map(([token, meaning]) => <div key={token}><dt><code>{token}</code></dt><dd>{meaning}</dd></div>)}</dl>}
           {section.id === "how-it-works" && <div className="guide-flow"><span>DSL</span><span>Gemini harness</span><span>Execution server</span><span>Results</span></div>}
           {section.id === "pitfalls" && <div className="guide-callout"><InfoIcon size={20} aria-hidden="true" /><p>Keep the result observable with <code>sink</code>. Move setup outside <code>#bench</code> unless setup is the operation you want to measure.</p></div>}
+          {section.id === "native-assembly" && <>
+            <p>Go uses cgo to bind bodyless declarations. Supported types are fixed-width integers, int, uint, uintptr, float32, float64, byte, rune, and pointers to those types. A function can return one value or no value.</p>
+            <pre><code>{"#globals\nfunc NOPAllBytesASM(count uint64)\n\n#bench\nNOPAllBytesASM(uint64(N))"}</code></pre>
+            <p>Python binds pass or ellipsis stubs with ctypes annotations, including numeric types, c_void_p and POINTER(type). Specify the return type explicitly; use None for void.</p>
+            <pre><code>{"#imports\nimport ctypes\n\n#globals\ndef NOPAllBytesASM(count: ctypes.c_uint64) -> None:\n    ...\n\n#bench\nNOPAllBytesASM(N)"}</code></pre>
+            <p>Executors require GCC or Clang; Go also requires CGO_ENABLED=1. The x64 example uses NASM (install nasm on the executor), with global, section .text, db, and semicolon comments. The executor detects NASM directives and handles object format, macOS symbol prefixes, and Linux stack metadata. Existing GNU/Clang assembly is also supported. ARM64 uses GNU/Clang AArch64 syntax, with examples generated for the selected host.</p>
+            <p>Assembly follows the host C ABI: x64 Linux/macOS passes the first two integer arguments in RDI/RSI; Windows examples using RCX/RDX need those registers adapted. ARM64 uses X0/X1. Preserve callee-saved registers and stack alignment, return normally, and use position-independent addressing. Go pointer arguments must obey cgo pointer rules and cannot be retained after the call.</p>
+            <p>Both cgo and ctypes calls add overhead inside the timed region. Put repeated work inside the assembly function when measuring short instructions. The executor runs only its native architecture. Go Plan 9 syntax, inline assembly and ARM32 are unsupported. Compiler and linker errors appear in the run log.</p>
+          </>}
           {primitives.filter((entry) => lists[section.id]?.includes(entry.name) && (!query || matches(`${section.title} ${section.copy} ${entry.name} ${entry.description}`))).map((entry) => <Primitive key={entry.name} entry={entry} />)}
         </section>)}
       </div>

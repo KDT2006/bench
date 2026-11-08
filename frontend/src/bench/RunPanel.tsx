@@ -2,12 +2,13 @@ import { Suspense, lazy, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
-import type { Lane, RunEvent, Workspace } from "../api/types";
+import type { FileName, Lane, RunEvent, Workspace } from "../api/types";
 import { LaneBadge, defaultChart, laneRatio, type ChartSettings } from "../chart/config";
-import { buildErrorLine, bytes, formatRatio, laneVar, num, param, params, statusLabel, time } from "../model/format";
+import { assemblyErrorLine, buildErrorLine, bytes, formatRatio, laneVar, num, param, params, statusLabel, time } from "../model/format";
 import { useBench, type Panel } from "../model/state";
 import { assembleSections, parseSections } from "../model/sections";
 import { MAX_PERMUTATIONS, parseSweep, sweepCombinations, unionSweep } from "../model/sweep";
+import { assemblyFile } from "../model/assembly";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const tabs: [Panel, string][] = [["live", "Live"], ["sweep", "Sweep"], ["build", "Output"], ["log", "Run log"]];
@@ -27,7 +28,7 @@ function eventText(event: RunEvent) {
 }
 
 export default function RunPanel({ workspace, onJump, onResize, editable }: {
-  workspace: Workspace; onJump: (lane: Lane, line: number) => void;
+  workspace: Workspace; onJump: (lane: Lane, line: number, file?: FileName) => void;
   onResize: (height: number) => void; editable: boolean;
 }) {
   const active = useBench((s) => s.active);
@@ -130,7 +131,7 @@ export default function RunPanel({ workspace, onJump, onResize, editable }: {
             {build?.type === "build_done" && !build.ok ? <pre className="error-text">{build.log}</pre>
               : failure?.type === "error" ? <pre className="error-text">{failure.message}</pre>
                 : build?.type === "build_done" ? <p className="help-text">{build.log}</p> : <p className="help-text">No output yet.</p>}
-            {line !== undefined && <button className="control" type="button" onClick={() => onJump(lane, line)}>Go to line</button>}
+            {line !== undefined && <button className="control" type="button" onClick={() => onJump(lane, line, build?.type === "build_done" && assemblyErrorLine(build.log) !== undefined ? assemblyFile(lane) : undefined)}>Go to line</button>}
             {timings.length > 0 && <ol className="event-log">{timings.map(({ params: values, ms }, index) =>
               <li key={index}><span className="mono">{time(ms * 1e6)}</span><span>{params(values)}</span></li>)}</ol>}
             {problems.map((problem) => <p className="error-text" key={problem}>{problem}</p>)}

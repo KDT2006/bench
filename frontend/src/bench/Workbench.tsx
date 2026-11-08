@@ -12,13 +12,14 @@ import { download } from "../model/download";
 import { LaneBadge } from "../chart/config";
 import { generateLane, isStale, runBench } from "../model/actions";
 import { freshWorkspace, replaceWorkspace, useBench, validWorkspace } from "../model/state";
-import { buildErrorLine, harness, laneColors, laneVar, languages } from "../model/format";
+import { assemblyErrorLine, buildErrorLine, harness, laneColors, laneVar, languages } from "../model/format";
 import { starterLane } from "../model/examples";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
 import LaneOptions from "./LaneOptions";
 import CompilerOptions from "./CompilerOptions";
 import RunPanel from "./RunPanel";
+import { assemblyExample, assemblyFile, SOURCE_CHAR_LIMIT, sourceLength } from "../model/assembly";
 
 const Editor = lazy(() => import("./Editor"));
 const small = matchMedia("(width < 768px)");
@@ -28,7 +29,7 @@ function useMedia(query: MediaQueryList) {
 }
 export function useReadOnlyWidth() { return useMedia(small); }
 const laneLabels = ["A", "B", "C", "D"] as const;
-const laneFiles = (lane: Lane): FileName[] => ["benchmark.perf", harness(lane.language)];
+const laneFiles = (lane: Lane): FileName[] => ["benchmark.perf", harness(lane.language), assemblyFile(lane)];
 
 export function EditorSkeleton({ text = "Loading editor…" }: { text?: string }) {
   return <div className="editor-skeleton loading-state" role="status"><p>{text}</p><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>;
@@ -99,13 +100,15 @@ function LanePane({ lane, file, linked, editable, machine, arches, setFile, setC
   const menuWrap = useRef<HTMLDivElement>(null);
   const oldCode = useRef<string | undefined>(undefined);
   const harnessName = harness(lane.language);
+  const nativeFile = assemblyFile(lane);
   const harnessText = lane.files[harnessName];
   const compiling = events?.findLast(({ event }) => event.type === "build_done" && event.laneId === lane.id)?.event;
   const issue = compiling?.type === "build_done" && !compiling.ok ? compiling.log : undefined;
   const issueLine = issue ? buildErrorLine(issue) : undefined;
+  const issueFile = issue && assemblyErrorLine(issue) !== undefined ? nativeFile : harnessName;
   const failed = events?.some(({ event }) => event.type === "error" && event.laneId === lane.id);
   const translationOnly = Boolean(machine && !machine.languages?.includes(lane.language));
-  const buildError = file === harnessName && issue && issueLine && snapshot?.files[file] === lane.files[file] ? { line: issueLine, message: issue } : undefined;
+  const buildError = file === issueFile && issue && issueLine && snapshot?.files[file] === lane.files[file] ? { line: issueLine, message: issue } : undefined;
   const total = events?.findLast(({ event }) => event.type === "perm_start" && event.laneId === lane.id)?.event;
   const loadingHarness = generating && file === harnessName;
   const readOnly = !editable || (file === "benchmark.perf" && lane.mode === "ejected") || (file === harnessName && lane.mode === "scaffold");
@@ -218,12 +221,30 @@ function LanePane({ lane, file, linked, editable, machine, arches, setFile, setC
       <div className="tab-strip" role="tablist" aria-label={`Lane ${lane.label} files`}>{laneFiles(lane).map((name) =>
         <button type="button" role="tab" aria-selected={file === name} key={name} title={name} onClick={() => { flushEditors(); setFile(name); }}>
           {name}{snapshot && snapshot.files[name] !== lane.files[name] && <span className="file-dirty" aria-label="Modified since run">•</span>}
-          {issue && name === harnessName && <span className="error-text" aria-label="Build failed">●</span>}
+          {issue && name === issueFile && <span className="error-text" aria-label="Build failed">●</span>}
         </button>)}
       </div>
       <span className={`file-state${issue || failed ? " error-text" : ""}`} title={status}>{status}</span>
     </div>
     {file === "benchmark.perf" && linked && <div className="editor-note"><LinkSimpleIcon size={14} aria-hidden="true" /> Linked benchmark.perf</div>}
+    {file === nativeFile && <div className="editor-note">
+      <span>Native {lane.arch} · C ABI · {sourceLength(lane.files[file] ?? "").toLocaleString()} / {SOURCE_CHAR_LIMIT.toLocaleString()} characters.
+        Declare {lane.language === "go" ? "bodyless functions" : "typed ellipsis functions"} in #globals in code mode. <a href="/docs/guide#native-assembly">Assembly guide</a></span>
+      {editable && <button type="button" className="text-action" disabled={preparingRun || generating} onClick={() => {
+        flushEditors();
+        setConfirm({ title: "Load native NOP example?", text: "This replaces this lane’s code, assembly and sweep, and switches it to code mode.", action: "Load example", run: () => {
+          const example = assemblyExample(lane.language, lane.arch, machine?.os);
+          change(lane.id, (entry) => {
+            const files = { ...entry.files };
+            delete files["native.S"];
+            delete files["native.asm"];
+            return { ...entry, mode: "ejected", scaffold: undefined, files: { ...files,
+              "benchmark.perf": example.code, [harnessName]: example.code, [example.file]: example.assembly } };
+          });
+          setFile(example.file);
+        } });
+      }}>Load NOP example</button>}
+    </div>}
     {file === "benchmark.perf" && lane.mode === "ejected" && <div className="editor-note">DSL reference. Edit sweep parameters in the Sweep tab.</div>}
     {file === harnessName && lane.mode === "scaffold" && !loadingHarness && <div className="editor-note">
       {harnessText ? "Generated from benchmark.perf. Read-only until you edit as code." : "Translate to view the harness."}
@@ -260,7 +281,7 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
   const [widthPreview, setWidthPreview] = useState<Record<string, number> | null>(null);
   const [heightPreview, setHeightPreview] = useState<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  const grid = !tabs && workspace.lanes.length >= 3 && layout.grid;
+  const grid = !tabs && workspace.lanes.length >= 3;
   const shown = tabs ? [selectedLane] : workspace.lanes;
 
   // A lane keeps its chosen architecture while some executor for its language runs on it;
@@ -328,9 +349,9 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
       download(`${basename}.zip`, new Blob([new Uint8Array(archive)], { type: "application/zip" }));
     } catch { useBench.getState().notify({ text: "Couldn’t export the files. Try again.", error: true }); }
   }
-  function jumpTo(lane: Lane, line: number) {
+  function jumpTo(lane: Lane, line: number, file: FileName = harness(lane.language)) {
     if (!workspace.lanes.some((entry) => entry.id === lane.id)) return;
-    select(lane, harness(lane.language));
+    select(lane, file);
     setJump({ id: lane.id, line, serial: Date.now() });
   }
   useEffect(() => {
@@ -382,14 +403,13 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
           <button type="button" onClick={() => void exportWorkspace(false)}>Workspace JSON</button>
           <button type="button" onClick={() => void exportWorkspace(true)}>Raw files ZIP</button>
         </div></details>
-        {workspace.lanes.length >= 3 && <button type="button" className="control" aria-pressed={layout.grid} onClick={() => setLayout({ grid: !layout.grid })}>Grid</button>}
         <button className="control" type="button" onClick={() => setAddOpen(true)} disabled={workspace.lanes.length >= 4} title={workspace.lanes.length >= 4 ? "You can use up to four lanes" : "Add lane"}><PlusIcon size={16} aria-hidden="true" /> Add lane</button>
       </div>
     </div>}
     {tabs && shown.length > 0 && workspace.lanes.length > 1 && <div className="tab-strip lane-switcher" aria-label="Choose lane">
       {workspace.lanes.map((lane) => <button type="button" key={lane.id} aria-pressed={selectedLane.id === lane.id} onClick={() => { flushEditors(); select(lane); }}><LaneBadge lane={lane} /> {lane.name || languages[lane.language]}</button>)}
     </div>}
-    <div className={`lanes${grid ? " lanes-grid" : ""}${shown.length >= 3 ? " lanes-many" : ""}`}>
+    <div className={`lanes${grid ? " lanes-grid" : ""}`}>
       {shown.map((lane, index) => <div className="lane-wrap" key={lane.id} style={{ "--lane-width": widthPreview?.[lane.label] ?? layout.widths[lane.label] ?? 1 } as CSSProperties}>
         <LanePane lane={lane} file={fileFor(lane)} linked={workspace.linkDsl && workspace.lanes.filter((item) => item.mode === "scaffold").length > 1 && lane.mode === "scaffold"} editable={editable}
           machine={machines?.find((target) => target.languages?.includes(lane.language) && target.arch === lane.arch) ?? machines?.find((target) => target.languages?.includes(lane.language))}

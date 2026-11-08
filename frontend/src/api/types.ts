@@ -1,7 +1,7 @@
 export type Lang = "go" | "python";
 export type Arch = "x86_64" | "arm64";
 export type Mode = "scaffold" | "ejected";
-export type FileName = "benchmark.perf" | "harness.go" | "harness.py";
+export type FileName = "benchmark.perf" | "harness.go" | "harness.py" | "native.S" | "native.asm";
 
 export interface Workspace {
   title: string;
@@ -102,6 +102,7 @@ export interface ProxyHealth {
   unavailable: { language: string; message: string }[];
 }
 export interface ExecuteRequest {
+  assembly?: string;
   compilerFlags?: string[];
   name: string; byteCount: number; fenced: boolean; code: string; language: Lang; arch: string;
 }
