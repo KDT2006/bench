@@ -8,11 +8,13 @@ import (
 )
 
 // localResponse is what the local Go server returns from POST /execute: one result per sweep
-// combination. Times in Measurements are CPU timer ticks.
+// combination. Its results match execution/go's BenchmarkResult JSON.
 type localResponse struct {
 	Results *[]localResult `json:"results"`
 }
 
+// localResult contains raw measurements plus per-iteration milliseconds converted
+// by the execution server using TimerFrequency. RunWindowNS is nanoseconds.
 type localResult struct {
 	Name            string            `json:"name"`
 	ByteCount       uint64            `json:"byte_count"`
@@ -27,20 +29,23 @@ type localResult struct {
 	Measurements    localMeasurements `json:"measurements"`
 }
 
+// localMeasurements matches execution/go's BenchmarkMeasurements. Times are CPU
+// timer ticks; fault and counter Min/Max values belong to the fastest/slowest
+// timed iterations. Derived averages and throughput are not returned here.
 type localMeasurements struct {
-	MinTime   uint64
-	MaxTime   uint64
-	TotalTime uint64
+	MinTime   uint64 `json:"MinTime"`
+	MaxTime   uint64 `json:"MaxTime"`
+	TotalTime uint64 `json:"TotalTime"`
 
-	MajorPageFaultCountMin int64
-	MinorPageFaultCountMin int64
-	MajorPageFaultCountMax int64
-	MinorPageFaultCountMax int64
+	MajorPageFaultCountMin int64 `json:"MajorPageFaultCountMin"`
+	MinorPageFaultCountMin int64 `json:"MinorPageFaultCountMin"`
+	MajorPageFaultCountMax int64 `json:"MajorPageFaultCountMax"`
+	MinorPageFaultCountMax int64 `json:"MinorPageFaultCountMax"`
 
-	L1DataMissMin  int64
-	L1DataMissMax  int64
-	BranchMisssMin int64
-	BranchMissMax  int64
+	L1DataMissMin  int64 `json:"L1DataMissMin"`
+	L1DataMissMax  int64 `json:"L1DataMissMax"`
+	BranchMisssMin int64 `json:"BranchMisssMin"` // Spelling matches the profiler's wire format.
+	BranchMissMax  int64 `json:"BranchMissMax"`
 }
 
 // ExecuteResponse is what the proxy returns to the website.
@@ -62,7 +67,8 @@ type Result struct {
 	TimeMs          TimeMs       `json:"timeMs"`
 }
 
-// Measurements keeps the profiler's field names. Times are ticks. Min/Max page-fault, L1 and
+// Measurements is the website schema, including proxy-computed averages and
+// throughput alongside raw profiler fields. Times are ticks. Min/Max page-fault, L1 and
 // branch values belong to the fastest/slowest iteration. GigabytesPerSecondMin is computed from
 // MinTime (the fastest iteration), matching the profiler. Throughput is zero when byteCount or
 // timerFrequency is zero.
