@@ -32,6 +32,24 @@ On the remote machine, listen on the LAN: `go run . -addr 0.0.0.0:6969` and
 `python3 -m execution.py.main --host 0.0.0.0`. These servers run arbitrary code, so only
 expose them on a trusted network and firewall them to the proxy's IP.
 
+### Deploying (Render + ngrok)
+
+On each laptop run `scripts/lin-script.sh` or `scripts/mac-script.sh`. Each one starts both
+executors, tunnels them with ngrok, and prints two `NAME=URL` lines. Set those in the Render
+service's Environment and choose **Save and deploy**. Render restarts the proxy, and the
+proxy's URL stays the same.
+
+| Variable | Routes |
+|---|---|
+| `GO_LINUX_URL` | `go/linux/amd64` |
+| `PYTHON_LINUX_URL` | `python/linux/amd64` |
+| `GO_MAC_URL` | `go/darwin/arm64` |
+| `PYTHON_MAC_URL` | `python/darwin/arm64` |
+
+Each value is a base URL (`/execute` is appended) or a full execute URL. Empty or unset
+leaves that target unconfigured. `-backend` flags override these. `PORT` (set by Render)
+changes the default `-addr` to `:$PORT`.
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `-addr` | `:8080` | Listen address |

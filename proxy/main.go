@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -59,6 +60,30 @@ func (b backends) Set(value string) error {
 	return nil
 }
 
+// envTargets names the environment variables that hold each laptop executor's public URL
+// (e.g. an ngrok URL). An empty or unset variable leaves that target unconfigured.
+var envTargets = []struct{ name, key string }{
+	{"GO_LINUX_URL", "go/linux/amd64"},
+	{"PYTHON_LINUX_URL", "python/linux/amd64"},
+	{"GO_MAC_URL", "go/darwin/arm64"},
+	{"PYTHON_MAC_URL", "python/darwin/arm64"},
+}
+
+// applyEnv adds a backend for each non-empty envTargets variable. The value may be a base
+// URL ("https://abc.ngrok-free.app") or a full execute URL; /execute is appended if missing.
+func applyEnv(b backends, getenv func(string) string) {
+	for _, target := range envTargets {
+		value := strings.TrimRight(strings.TrimSpace(getenv(target.name)), "/")
+		if value == "" {
+			continue
+		}
+		if !strings.HasSuffix(value, "/execute") {
+			value += "/execute"
+		}
+		b[target.key] = value
+	}
+}
+
 type proxy struct {
 	backends backends
 	client   *http.Client
@@ -66,7 +91,12 @@ type proxy struct {
 }
 
 func main() {
-	addr := flag.String("addr", ":8080", "listen address")
+	// Hosts such as Render assign the port through $PORT.
+	defaultAddr := ":8080"
+	if port := os.Getenv("PORT"); port != "" {
+		defaultAddr = ":" + port
+	}
+	addr := flag.String("addr", defaultAddr, "listen address (default :$PORT when PORT is set)")
 	origin := flag.String("allow-origin", "*", "origin allowed to call the proxy from a browser; empty disables CORS")
 	// Servers on this machine are configured by default; -backend adds or replaces entries.
 	local := runtime.GOOS + "/" + runtime.GOARCH
@@ -74,7 +104,8 @@ func main() {
 		"go/" + local:     "http://127.0.0.1:6969/execute",
 		"python/" + local: "http://127.0.0.1:6970/execute",
 	}
-	flag.Var(targets, "backend", "language/os/arch=execute URL; repeatable")
+	applyEnv(targets, os.Getenv)
+	flag.Var(targets, "backend", "language/os/arch=execute URL; repeatable; overrides the *_URL environment variables")
 	flag.Parse()
 
 	p := &proxy{

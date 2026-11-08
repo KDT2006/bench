@@ -266,3 +266,25 @@ func TestBackendFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyEnv(t *testing.T) {
+	env := map[string]string{
+		"GO_LINUX_URL":   "https://linux-go.ngrok-free.app/",
+		"PYTHON_MAC_URL": "https://mac-py.ngrok-free.app/execute",
+		"GO_MAC_URL":     "  ",
+	}
+	b := backends{"go/linux/amd64": "http://127.0.0.1:6969/execute"}
+	applyEnv(b, func(name string) string { return env[name] })
+	want := backends{
+		"go/linux/amd64":      "https://linux-go.ngrok-free.app/execute",
+		"python/darwin/arm64": "https://mac-py.ngrok-free.app/execute",
+	}
+	if len(b) != len(want) {
+		t.Fatalf("backends = %v, want %v", b, want)
+	}
+	for key, url := range want {
+		if b[key] != url {
+			t.Fatalf("backends[%q] = %q, want %q", key, b[key], url)
+		}
+	}
+}
