@@ -178,8 +178,8 @@ export function App() {
   const laneArches = useBench((s) => [...new Set(s.workspace.lanes.map((lane) => lane.arch))].join(", "));
   const workspaceLanes = useBench((s) => s.workspace.lanes);
   const archMismatch = Boolean(workbench && workspaceLanes.some((lane) => {
-    const target = machines.data?.find((target) => target.languages?.includes(lane.language));
-    return target && target.arch !== lane.arch;
+    const targets = machines.data?.filter((target) => target.languages?.includes(lane.language)) ?? [];
+    return targets.length > 0 && !targets.some((target) => target.arch === lane.arch);
   }));
   const machineLabel = machines.data && machines.data.length > 1 ? `${machines.data.length} execution targets` : machine ? `${machine.id} · ${machine.arch} · ${num.format(machine.threads)} threads${archMismatch ? ` · lanes use ${laneArches}` : ""}`
     : machines.isPending ? "Checking machine…" : machines.isError ? "Machine unavailable" : "No machine available";
