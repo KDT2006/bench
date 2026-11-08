@@ -77,12 +77,12 @@ function CodeDiff({ before, after }: { before: string; after: string }) {
 
 type Confirm = { title: string; text: string; action: string; cancel?: string; run: () => void };
 interface LaneProps {
-  lane: Lane; file: FileName; linked: boolean; editable: boolean; machine?: Machine;
+  lane: Lane; file: FileName; linked: boolean; editable: boolean; machine?: Machine; arches: Lane["arch"][];
   setFile: (file: FileName) => void; setConfirm: (confirm: Confirm) => void; add: (lane?: Lane) => void;
   canRemove: boolean; canAdd: boolean; jump?: { line: number; serial: number }; onFocus: () => void;
 }
 
-function LanePane({ lane, file, linked, editable, machine, setFile, setConfirm, add, canRemove, canAdd, jump, onFocus }: LaneProps) {
+function LanePane({ lane, file, linked, editable, machine, arches, setFile, setConfirm, add, canRemove, canAdd, jump, onFocus }: LaneProps) {
   const editFile = useBench((s) => s.editFile);
   const change = useBench((s) => s.changeLane);
   const generating = useBench((s) => s.generating.includes(lane.id));
@@ -121,6 +121,15 @@ function LanePane({ lane, file, linked, editable, machine, setFile, setConfirm, 
     if (harnessText !== oldCode.current && oldCode.current !== undefined && harnessText !== undefined) setDiff({ before: oldCode.current, after: harnessText });
     oldCode.current = harnessText;
   }, [harnessText]);
+
+  function updateArch(arch: Lane["arch"]) {
+    flushEditors();
+    // GOARM64 / GOAMD64 only apply to their own architecture.
+    change(lane.id, (entry) => {
+      const { GOARM64: _arm, GOAMD64: _amd, ...env } = entry.build.env;
+      return { ...entry, arch, build: { ...entry.build, env } };
+    });
+  }
 
   function updateLanguage(language: Lane["language"]) {
     flushEditors();
@@ -177,7 +186,12 @@ function LanePane({ lane, file, linked, editable, machine, setFile, setConfirm, 
           {Object.entries(languages).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
         </select>
       </> : <><span className="lane-name view-only">{lane.name || `Lane ${lane.label}`}</span><span>{languages[lane.language]}</span></>}
-      <code className="lane-arch" title="The server's architecture">{lane.arch}</code>
+      {editable && arches.length > 1
+        ? <select className="lane-arch" aria-label={`Lane ${lane.label} architecture`} title="Execution target architecture" value={lane.arch} disabled={generating || preparingRun}
+          onChange={(e) => updateArch(e.target.value as Lane["arch"])}>
+          {arches.map((arch) => <option value={arch} key={arch}>{arch}</option>)}
+        </select>
+        : <code className="lane-arch" title="The server's architecture">{lane.arch}</code>}
       {translationOnly && <span className="chip" title={`The server has no ${languages[lane.language]} executor. You can translate this lane, but not run it.`}>Translation only</span>}
       <span className="chip mode-chip" title={lane.mode === "scaffold" ? "Edit the DSL and generate a harness." : "Edit the harness directly."}>{lane.mode === "scaffold" ? "Scaffold" : "Code"}</span>
       {editable && lane.mode === "scaffold" && <button className="control" type="button"
@@ -249,13 +263,15 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
   const grid = !tabs && workspace.lanes.length >= 3 && layout.grid;
   const shown = tabs ? [selectedLane] : workspace.lanes;
 
-  // Each lane follows the architecture of its language's execution target.
+  // A lane keeps its chosen architecture while some executor for its language runs on it;
+  // otherwise it falls back to the first executor for its language.
   useEffect(() => {
     if (!machines?.length) return;
     const current = useBench.getState().workspace;
     const lanes = current.lanes.map((lane) => {
-      const target = machines.find((target) => target.languages?.includes(lane.language));
-      return target && target.arch !== lane.arch ? { ...lane, arch: target.arch } : lane;
+      const targets = machines.filter((target) => target.languages?.includes(lane.language));
+      if (!targets.length || targets.some((target) => target.arch === lane.arch)) return lane;
+      return { ...lane, arch: targets[0].arch };
     });
     if (lanes.some((lane, index) => lane !== current.lanes[index])) useBench.setState({ workspace: { ...current, lanes } });
   }, [machines, workspace]);
@@ -376,7 +392,8 @@ function WorkspaceView({ workspace, machines }: { workspace: Workspace; machines
     <div className={`lanes${grid ? " lanes-grid" : ""}${shown.length >= 3 ? " lanes-many" : ""}`}>
       {shown.map((lane, index) => <div className="lane-wrap" key={lane.id} style={{ "--lane-width": widthPreview?.[lane.label] ?? layout.widths[lane.label] ?? 1 } as CSSProperties}>
         <LanePane lane={lane} file={fileFor(lane)} linked={workspace.linkDsl && workspace.lanes.filter((item) => item.mode === "scaffold").length > 1 && lane.mode === "scaffold"} editable={editable}
-          machine={machines?.find((target) => target.languages?.includes(lane.language))} setFile={(file) => select(lane, file)} setConfirm={setConfirm} add={add}
+          machine={machines?.find((target) => target.languages?.includes(lane.language) && target.arch === lane.arch) ?? machines?.find((target) => target.languages?.includes(lane.language))}
+          arches={[...new Set((machines ?? []).filter((target) => target.languages?.includes(lane.language)).map((target) => target.arch))]} setFile={(file) => select(lane, file)} setConfirm={setConfirm} add={add}
           canAdd={workspace.lanes.length < 4} canRemove={workspace.lanes.length > 1} jump={jump?.id === lane.id ? jump : undefined}
           onFocus={() => { if (selectedLane.id !== lane.id) select(lane); }} />
         {!grid && !tabs && index < shown.length - 1 && editable && <div className="lane-resizer" role="separator" tabIndex={0} aria-label={`Resize lanes ${lane.label} and ${shown[index + 1].label}`} aria-valuenow={Math.round((layout.widths[lane.label] ?? 1) * 50)}
