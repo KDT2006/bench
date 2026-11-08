@@ -1,7 +1,6 @@
-import type { ParseResponse, SweepParam } from "../api/types";
+import type { Lane, ParseResponse, SweepParam } from "../api/types";
 
 export const MAX_PERMUTATIONS = 256;
-const reserved = new Set("break default func interface select case defer go map struct chan else goto package switch const fallthrough if range type continue for import return var _".split(" "));
 export function sweepCombinations(sweep: SweepParam[]) {
   return sweep.reduce((count, param) => count * param.values.length, 1);
 }
@@ -13,7 +12,6 @@ export function sweepMatrix(sweep: SweepParam[]): Record<string, number>[] {
 export function parseSweep(dsl: string): ParseResponse {
   const sweep: SweepParam[] = [];
   const errors: string[] = [];
-  const names = new Set<string>();
   let inSweep = false;
   for (const [index, raw] of dsl.split(/\r?\n/).entries()) {
     const line = raw.trim();
@@ -21,14 +19,21 @@ export function parseSweep(dsl: string): ParseResponse {
     if (!inSweep || !line) continue;
     const match = /^([A-Za-z_]\w*)\s*:\s*(\[.*\])$/.exec(line);
     try {
-      if (!match || reserved.has(match[1]) || names.has(match[1])) throw new Error();
+      if (!match) throw new Error();
       const values: unknown = JSON.parse(match[2]);
       if (!Array.isArray(values) || !values.length || !values.every((value) => typeof value === "number" && Number.isSafeInteger(value))) throw new Error();
-      names.add(match[1]);
       sweep.push({ name: match[1], values });
-    } catch { errors.push(`Line ${index + 1}: use a unique parameter and a nonempty integer list, e.g. N: [1024, 4096].`); }
+    } catch { errors.push(`Line ${index + 1}: use a parameter name and a nonempty integer list, e.g. N: [1024, 4096].`); }
   }
   const permutations = sweepCombinations(sweep);
   if (permutations > MAX_PERMUTATIONS) errors.push(`The sweep has ${permutations} combinations. The limit is ${MAX_PERMUTATIONS}.`);
-  return { sweep, permutations: errors.length ? 0 : permutations, errors };
+  return { sweep, errors };
+}
+
+/** Every parameter used by any lane, with the union of its values across lanes. */
+export function unionSweep(lanes: Lane[]): SweepParam[] {
+  const sweeps = lanes.map((lane) => parseSweep(lane.files["benchmark.perf"] ?? "").sweep);
+  return [...new Set(sweeps.flat().map(({ name }) => name))].map((name) => ({
+    name, values: [...new Set(sweeps.flatMap((sweep) => sweep.find((entry) => entry.name === name)?.values ?? []))],
+  }));
 }

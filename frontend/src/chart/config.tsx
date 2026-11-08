@@ -1,15 +1,15 @@
 import type { Lane, ResultRow } from "../api/types";
 import { laneVar, paramsKey, type Metric, type Statistic } from "../model/format";
 
-export const chartTypes = ["line", "ratio", "bars", "distribution", "heatmap", "scatter"] as const;
+export const chartTypes = ["line", "ratio", "bars", "heatmap", "scatter"] as const;
 export type ChartType = typeof chartTypes[number];
 export type Normalize = "raw" | "element" | "byte";
 export type YScale = "auto" | "linear" | "log";
 export interface ChartSettings {
   type: ChartType; metric: Metric; stat: Statistic; x: string; logX: boolean; yScale: YScale;
-  normalize: Normalize; size: string; caches: boolean; group: string; compareMetric: Metric; heatLane: string;
+  normalize: Normalize; size: string; group: string; compareMetric: Metric; heatLane: string;
 }
-export const defaultChart: ChartSettings = { type: "line", metric: "cycles", stat: "min", x: "N", logX: true, yScale: "auto", normalize: "element", size: "N", caches: true, group: "", compareMetric: "timeNs", heatLane: "" };
+export const defaultChart: ChartSettings = { type: "line", metric: "timeNs", stat: "min", x: "N", logX: true, yScale: "auto", normalize: "element", size: "N", group: "", compareMetric: "cycles", heatLane: "" };
 export const shapes = { A: "circle", B: "rect", C: "triangle", D: "diamond" };
 
 export function LaneBadge({ lane }: { lane: Lane }) {

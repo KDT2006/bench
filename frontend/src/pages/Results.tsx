@@ -6,30 +6,26 @@ import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimpl
 import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { ArrowUpIcon } from "@phosphor-icons/react/dist/csr/ArrowUp";
 import { getRun } from "../api/client";
-import { USE_MOCK_API } from "../api/config";
 import type { FileName, ResultRow, Run, Stat } from "../api/types";
 import { chartTypes, defaultChart, LaneBadge, laneRatio, type ChartSettings, type ChartType, type Normalize, type YScale } from "../chart/config";
-import { bytes, date, duration, formatRatio, harness, laneVar, languages, metricNames, num, param, params, paramsKey, type Metric } from "../model/format";
+import { date, duration, formatMetric, formatRatio, harness, laneVar, languages, metricNames, num, param, params, paramsKey, statusLabel, time, type Metric } from "../model/format";
 import { MachineDetails } from "../shell/MachineDetails";
 import { download } from "../model/download";
-import { sampleRun } from "../model/examples";
-import { ShareDialog } from "./ShareDialog";
 import { EditorSkeleton } from "../bench/Workbench";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
 const Editor = lazy(() => import("../bench/Editor"));
 const chartLabels: Record<ChartType, string> = {
-  line: "Over the sweep", ratio: "Relative to A", bars: "By input", distribution: "Spread", heatmap: "Heatmap", scatter: "Two metrics",
+  line: "Over the sweep", ratio: "Relative to A", bars: "By input", heatmap: "Heatmap", scatter: "Two metrics",
 };
 const chartCaptions: Record<ChartType, string> = {
   line: "Each point is a measured input. Follow a lane’s color to see how it changes across the sweep.",
   ratio: "Lane A is the 1× baseline. A value of 2× means twice the selected metric at the same input.",
   bars: "Compare the selected metric by input, with one color per lane.",
-  distribution: "The boxes show the middle half of measured timer ticks. Whiskers show the full range.",
   heatmap: "Each cell shows the selected metric for a pair of sweep values.",
   scatter: "Each point shows two metrics measured for the same input.",
 };
-const stats: [keyof Stat, string][] = [["min", "Min"], ["max", "Max"], ["median", "Median"], ["mean", "Mean"], ["p95", "P95"], ["stddev", "Std. dev."], ["fastest", "Fastest timed iteration"], ["slowest", "Slowest timed iteration"]];
+const stats: [keyof Stat, string][] = [["min", "Min"], ["max", "Max"], ["mean", "Mean"], ["fastest", "Fastest timed iteration"], ["slowest", "Slowest timed iteration"]];
 const metrics = Object.keys(metricNames) as Metric[];
 
 function show(value: number | undefined, suffix = "") { return value === undefined || !Number.isFinite(value) ? "—" : num.format(value) + suffix; }
@@ -37,34 +33,25 @@ function show(value: number | undefined, suffix = "") { return value === undefin
 function finding(run: Run) {
   const [a, b] = run.workspaceSnapshot.lanes;
   if (!a || !b) return { text: "Use the sweep to see how the cost of this benchmark changes with input size." };
-  const metric = run.rows.some((row) => row.metrics.cycles) ? "cycles" : "timeNs";
+  const metric = run.rows.some((row) => row.metrics.timeNs) ? "timeNs" : "cycles";
   const ratios = laneRatio(run.rows, [a, b], metric, "min");
   const pairs = run.rows.filter((row) => row.laneId === b.id).flatMap((row) => {
     const ratio = ratios(row);
-    return ratio && Number.isFinite(ratio) ? [{ ratio, n: row.params.N }] : [];
+    return ratio && Number.isFinite(ratio) ? [{ ratio }] : [];
   });
   if (!pairs.length) return { text: "Compare lanes once both have results for the same parameters." };
   if (pairs.every(({ ratio }) => ratio >= 0.95 && ratio <= 1.05)) return { text: `Lanes ${a.label} and ${b.label} are within 5% of each other across the matched sizes.` };
-  const l2 = run.machine.caches.find((cache) => cache.level === "L2")?.sizeBytes;
-  const beyond = l2 ? pairs.filter(({ n }) => typeof n === "number" && n > l2) : [];
-  const cohort = beyond.length ? beyond : pairs;
-  const values = cohort.map((pair) => pair.ratio).sort((x, y) => x - y);
+  const values = pairs.map((pair) => pair.ratio).sort((x, y) => x - y);
   const mid = (values[Math.floor((values.length - 1) / 2)] + values[Math.ceil((values.length - 1) / 2)]) / 2;
-  if (cohort.some(({ ratio }) => mid >= 1 ? ratio <= 1 : ratio >= 1) || (mid >= 0.95 && mid <= 1.05)) return { text: "The faster lane depends on the input size. Use the ratio chart to see where they differ." };
+  if (pairs.some(({ ratio }) => mid >= 1 ? ratio <= 1 : ratio >= 1) || (mid >= 0.95 && mid <= 1.05)) return { text: "The faster lane depends on the input size. Use the ratio chart to see where they differ." };
   const [faster, slower] = mid >= 1 ? [a, b] : [b, a];
   const label = (lane: typeof a) => lane.name || (a.language === b.language ? `Lane ${lane.label}` : languages[lane.language]);
-  const range = beyond.length && l2 ? `past L2 (${bytes(l2)})` : "across matched parameters";
   return {
     value: formatRatio(Math.max(mid, 1 / mid)),
     text: metric === "cycles"
-      ? `${label(faster)} used fewer timer ticks than ${label(slower)} ${range}. Median ratio of minimum timer ticks.`
-      : `${label(faster)} ran faster than ${label(slower)} ${range}. Median ratio of minimum times.`,
+      ? `${label(faster)} used fewer timer ticks than ${label(slower)} across matched parameters. Median ratio of minimum timer ticks.`
+      : `${label(faster)} ran faster than ${label(slower)} across matched parameters. Median ratio of minimum times.`,
   };
-}
-
-function readableTime(ns: number) {
-  const [scale, unit] = ([[1e9, "s"], [1e6, "ms"], [1e3, "µs"], [1, "ns"]] as const).find(([scale]) => ns >= scale) ?? [1, "ns"];
-  return `${num.format(ns / scale)} ${unit}`;
 }
 
 function InputComparison({ rows, lanes, metric, stat }: { rows: ResultRow[]; lanes: Run["workspaceSnapshot"]["lanes"]; metric: Metric; stat: ChartSettings["stat"] }) {
@@ -103,7 +90,7 @@ function InputComparison({ rows, lanes, metric, stat }: { rows: ResultRow[]; lan
         <span><LaneBadge lane={lane} /> {lane.name || languages[lane.language]}</span>
         <div className="comparison-track" aria-hidden="true"><div style={{ width: `${max > 0 ? value / max * 100 : 0}%` }} /></div>
         <span className="mono" title={metric === "timeNs" ? `${show(value)} ns` : undefined}>
-          {metric === "timeNs" ? readableTime(value) : show(value, metric === "throughput" ? " GiB/s" : "")}
+          {formatMetric(metric, value)}
         </span>
       </li>;
     })}</ul>
@@ -116,11 +103,7 @@ function exportCsv(run: Run) {
   const fields = ["Lane", ...names, "Repetitions", "totalPageFaults", "l1DataMissesAvailable", "branchMissesAvailable", ...metrics.flatMap((metric) => allStats.map((stat) => `${metric}.${stat}`))];
   const rows = run.rows.map((row) => [run.workspaceSnapshot.lanes.find((lane) => lane.id === row.laneId)?.label, ...names.map((name) => row.params[name]),
     row.reps, row.profiler?.totalPageFaults, row.profiler?.counterAvailability.l1DataMisses, row.profiler?.counterAvailability.branchMisses, ...metrics.flatMap((metric) => allStats.map((stat) => row.metrics[metric]?.[stat]))]);
-  const csv = [fields, ...rows].map((row) => row.map((value) => {
-    let text = String(value ?? "");
-    if (typeof value === "string" && /^[\s]*[=+\-@]/.test(text)) text = "'" + text;
-    return `"${text.replaceAll('"', '""')}"`;
-  }).join(",")).join("\r\n");
+  const csv = [fields, ...rows].map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\r\n");
   download(`benchscope-${run.id}.csv`, new Blob([csv], { type: "text/csv;charset=utf-8" }));
 }
 
@@ -129,13 +112,16 @@ function ResultTable({ run, settings }: { run: Run; settings: ChartSettings }) {
   const laneFilter = filter.get("tableLane") ?? "";
   const search = filter.get("tableSearch") ?? "";
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [visibility, setVisibility] = useState<VisibilityState>({ mean: false, median: false, p95: false, stddev: false, pageFaults: false, cacheMisses: false, throughput: false });
+  const [visibility, setVisibility] = useState<VisibilityState>({ timeMax: false, timeAvg: false, ticksMin: false, ticksMax: false, ticksMean: false, pageFaults: false, throughput: false });
   const lanes = run.workspaceSnapshot.lanes;
   const columns = useMemo<ColumnDef<ResultRow>[]>(() => {
     const byId = new Map(lanes.map((lane) => [lane.id, lane]));
     const ratio = laneRatio(run.rows, lanes, settings.metric, settings.stat);
-    const numeric = (id: string, header: string, accessorFn: (row: ResultRow) => number | undefined, suffix = ""): ColumnDef<ResultRow> => ({
-      id, header, accessorFn, cell: (cell) => show(cell.getValue() as number | undefined, suffix),
+    const numeric = (id: string, header: string, accessorFn: (row: ResultRow) => number | undefined): ColumnDef<ResultRow> => ({
+      id, header, accessorFn, cell: (cell) => show(cell.getValue() as number | undefined),
+    });
+    const timed = (id: string, header: string, accessorFn: (row: ResultRow) => number | undefined): ColumnDef<ResultRow> => ({
+      id, header, accessorFn, cell: (cell) => { const value = cell.getValue() as number | undefined; return value === undefined ? "—" : <span title={`${num.format(value)} ns`}>{time(value)}</span>; },
     });
     return [
       { id: "lane", header: "Lane", accessorFn: (row) => byId.get(row.laneId)?.label, enableHiding: false, cell: ({ row }) => {
@@ -145,20 +131,18 @@ function ResultTable({ run, settings }: { run: Run; settings: ChartSettings }) {
         id: `param-${name}`, header: name, accessorFn: (row: ResultRow) => row.params[name],
         cell: (cell: { getValue: () => unknown }) => cell.getValue() === undefined ? "—" : param(name, cell.getValue() as string | number),
       })),
-      ...(["min", "max", "median", "mean", "p95", "stddev"] as const).map((key) => numeric(key, `${key === "p95" ? "P95" : key === "stddev" ? "Std. dev." : key[0].toUpperCase() + key.slice(1)} timer ticks`, (row) => row.metrics.cycles?.[key])),
-      { ...numeric("cv", "CV", (row) => row.metrics.cycles?.mean && row.metrics.cycles.stddev !== undefined ? row.metrics.cycles.stddev / row.metrics.cycles.mean * 100 : undefined, "%"),
-        cell: (cell) => { const value = cell.getValue() as number | undefined; return <>{show(value, "%")}{value !== undefined && value > 5 && <span className="chip noisy" title="Coefficient of variation exceeds 5%">Noisy</span>}</>; } },
-      numeric("time", "Min ns", (row) => row.metrics.timeNs?.min),
-      ...(settings.size ? [numeric("perSize", `Timer ticks per ${settings.normalize === "byte" ? "byte" : "element"}`, (row) => {
-        const value = row.params[settings.size]; return typeof value === "number" && value > 0 && row.metrics.cycles?.min !== undefined ? row.metrics.cycles.min / value : undefined;
+      timed("time", "Min time", (row) => row.metrics.timeNs?.min),
+      timed("timeMax", "Max time", (row) => row.metrics.timeNs?.max),
+      timed("timeAvg", "Mean time", (row) => row.metrics.timeNs?.mean),
+      ...(settings.size ? [timed("perSize", `Min time per ${settings.normalize === "byte" ? "byte" : "element"}`, (row) => {
+        const value = row.params[settings.size]; return typeof value === "number" && value > 0 && row.metrics.timeNs?.min !== undefined ? row.metrics.timeNs.min / value : undefined;
       })] : []),
+      ...(["min", "max", "mean"] as const).map((key) => numeric(`ticks${key[0].toUpperCase() + key.slice(1)}`, `${key[0].toUpperCase() + key.slice(1)} timer ticks`, (row) => row.metrics.cycles?.[key])),
       numeric("reps", "Reps", (row) => row.reps),
       numeric("pageFaults", "Mean page faults", (row) => row.metrics.pageFaults?.mean),
       numeric("pageFaults-fastest", "Page faults · fastest timed iteration", (row) => row.metrics.pageFaults?.fastest),
       numeric("pageFaults-slowest", "Page faults · slowest timed iteration", (row) => row.metrics.pageFaults?.slowest),
       numeric("totalPageFaults", "Total page faults", (row) => row.profiler?.totalPageFaults),
-      numeric("timeMax", "Max ns", (row) => row.metrics.timeNs?.max),
-      numeric("timeAvg", "Mean ns", (row) => row.metrics.timeNs?.mean),
       numeric("throughput", "Min throughput (GiB/s)", (row) => row.metrics.throughput?.min),
       ...(["cacheMisses", "branchMisses"] as const).flatMap((metric) => (["fastest", "slowest"] as const).map((stat) =>
         numeric(`${metric}-${stat}`, `${metricNames[metric]} · ${stat} timed iteration`, (row) => row.metrics[metric]?.[stat]))),
@@ -202,21 +186,20 @@ function RunConfiguration({ run }: { run: Run }) {
   return <section className="result-section">
     <h2>Configuration</h2>
     <div className="config-grid">{run.workspaceSnapshot.lanes.map((lane) => <details key={lane.id} className="config-lane" style={{ "--channel": laneVar(lane.label) } as React.CSSProperties}>
-      <summary><LaneBadge lane={lane} /> <strong>{languages[lane.language]}</strong><span className="help-text">{run.source === "live" ? "Server default" : lane.build.toolchainVersion} · {lane.arch} · {lane.mode === "ejected" ? "Code" : "Scaffold"}</span></summary>
-      <div className="config-lane-body"><dl className="readouts"><div><dt>Flags</dt><dd>{run.source === "live" ? "Server default" : lane.build.flags.join(" ") || "Default"}</dd></div>
-        <div><dt>Repetition limit</dt><dd>{run.source === "live" ? "Server default" : show(lane.runner.maxReps)}</dd></div><div><dt>Warmup</dt><dd>{run.source === "live" ? "Server default" : show(lane.runner.warmup)}</dd></div>
-        {run.source === "live" && <><div><dt>Bytes per iteration</dt><dd>{lane.execution?.byteCount ?? 0}</dd></div><div><dt>Fenced timing</dt><dd>{(lane.execution?.fenced ?? true) ? "On" : "Off"}</dd></div></>}
+      <summary><LaneBadge lane={lane} /> <strong>{languages[lane.language]}</strong><span className="help-text">Server default toolchain · {lane.arch} · {lane.mode === "ejected" ? "Code" : "Scaffold"}</span></summary>
+      <div className="config-lane-body"><dl className="readouts">
+        <div><dt>Build and runner</dt><dd>Server defaults</dd></div>
+        <div><dt>Bytes per iteration</dt><dd>{lane.execution?.byteCount ?? 0}</dd></div><div><dt>Fenced timing</dt><dd>{(lane.execution?.fenced ?? true) ? "On" : "Off"}</dd></div>
         {lane.scaffold && <div><dt>Scaffold model</dt><dd>{lane.scaffold.model}</dd></div>}
       </dl>
-      {(["benchmark.perf", harness(lane.language), "kernel.S"] as FileName[]).map((file) => lane.files[file] !== undefined && <details key={file} className="snapshot-file"><summary><code>{file}</code></summary><div className="read-editor"><Suspense fallback={<EditorSkeleton />}><Editor file={file} value={lane.files[file]!} label={`Lane ${lane.label} snapshot ${file}`} readOnly /></Suspense></div></details>)}</div>
+      {(["benchmark.perf", harness(lane.language)] as FileName[]).map((file) => lane.files[file] !== undefined && <details key={file} className="snapshot-file"><summary><code>{file}</code></summary><div className="read-editor"><Suspense fallback={<EditorSkeleton />}><Editor file={file} value={lane.files[file]!} label={`Lane ${lane.label} snapshot ${file}`} readOnly /></Suspense></div></details>)}</div>
     </details>)}</div>
-    <details className="snapshot-details"><summary>Machine snapshot · {run.machine.cpuModel}</summary><p className="help-text">Captured for this run.</p><MachineDetails machine={{ ...run.machine, queueLength: 0, status: "idle" }} frozen /></details>
+    <details className="snapshot-details"><summary>Machine snapshot · {run.machine.id}</summary><p className="help-text">Captured for this run.</p><MachineDetails machine={run.machine} /></details>
   </section>;
 }
 
 function RunView({ run }: { run: Run }) {
   const [url, setUrl] = useSearchParams();
-  const [share, setShare] = useState(false);
   const exportRef = useRef<(() => string) | null>(null);
   const chartType = chartTypes.find((entry) => entry === url.get("chart")) ?? "line";
   const presentMetrics = metrics.filter((entry) => run.rows.some((row) => row.metrics[entry]));
@@ -236,29 +219,15 @@ function RunView({ run }: { run: Run }) {
   const settings = useMemo<ChartSettings>(() => ({
     ...defaultChart, type: chartType, metric, stat, x: x?.name ?? "", size, normalize, group, heatLane,
     compareMetric,
-    logX: url.get("xScale") !== "linear", yScale, caches: url.get("caches") !== "off",
+    logX: url.get("xScale") !== "linear", yScale,
   }), [chartType, metric, stat, x, size, normalize, group, heatLane, yScale, compareMetric, url]);
   const insight = finding(run);
-  const isReplay = run.source !== "live" && (USE_MOCK_API || run.id === sampleRun.id);
-  const hasSamples = run.rows.some((row) => row.samples?.length);
   const unavailable: Partial<Record<ChartType, string>> = {
-    ratio: run.workspaceSnapshot.lanes.length < 2 && !url.get("compare") ? "Add a second lane for ratios." : undefined,
-    distribution: !hasSamples ? "This run has no raw samples." : undefined,
+    ratio: run.workspaceSnapshot.lanes.length < 2 ? "Add a second lane for ratios." : undefined,
     heatmap: run.sweep.length < 2 ? "Heatmaps need two sweep variables." : undefined,
     scatter: !run.rows.some((row) => row.metrics[metric]?.[stat] !== undefined && row.metrics[compareMetric]?.[stat] !== undefined) || metric === compareMetric ? "This chart needs two metrics with the selected statistic." : undefined,
   };
-  const compareId = url.get("compare");
-  const compare = useQuery({ queryKey: ["run", compareId], queryFn: ({ signal }) => getRun(compareId!, signal), enabled: Boolean(compareId && compareId !== run.id) });
-  const compatible = compare.data && JSON.stringify(compare.data.sweep) === JSON.stringify(run.sweep);
-  const comparison = useMemo(() => {
-    if (!compatible || !compare.data) return undefined;
-    const a = run.workspaceSnapshot.lanes[0];
-    const b = compare.data.workspaceSnapshot.lanes[0];
-    if (!a || !b) return undefined;
-    const second = { ...b, id: `comparison-${b.id}`, label: "B" as const, name: compare.data.workspaceSnapshot.title };
-    const rows = [...run.rows.filter((row) => row.laneId === a.id), ...compare.data.rows.filter((row) => row.laneId === b.id).map((row) => ({ ...row, laneId: second.id }))];
-    return { lanes: [{ ...a, label: "A" as const, name: run.workspaceSnapshot.title }, second], rows };
-  }, [compatible, compare.data, run]);
+  const shownCharts = chartTypes.filter((value) => !unavailable[value]);
 
   function update(key: string, value: string) {
     setUrl((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next; }, { replace: true, preventScrollReset: true });
@@ -274,17 +243,15 @@ function RunView({ run }: { run: Run }) {
     <label>Normalize<select value={normalize} disabled={!size} onChange={(e) => update("normalize", e.target.value)}><option value="raw">Raw</option><option value="element">Per element</option><option value="byte">Per byte</option></select></label>
     <label>Size parameter<select value={size} onChange={(e) => update("size", e.target.value)}>{!size && <option value="">Select a parameter</option>}{sizes.map(({ name }) => <option key={name}>{name}</option>)}</select></label>
     {chartType === "heatmap" && <label>Lane<select value={heatLane} onChange={(e) => update("heatLane", e.target.value)}>{run.workspaceSnapshot.lanes.map((lane) => <option value={lane.id} key={lane.id}>Lane {lane.label}</option>)}</select></label>}
-    <label className="check-setting"><input type="checkbox" checked={settings.caches} onChange={(e) => update("caches", e.target.checked ? "on" : "off")} /> Cache bands</label>
   </div>;
 
   return <div className="page results-page">
     <div className="results-heading">
-      <div><h1>{run.workspaceSnapshot.title}</h1><p>{date.format(new Date(run.startedAt))} · {run.machine.cpuModel} · {num.format(run.rows.length)} results · {duration(run.startedAt, run.finishedAt)}</p>
-        <div className="result-status"><span className="chip">{run.status === "done" ? "Finished" : run.status}</span><span className="chip">{isReplay ? "Sample replay" : run.rows.length ? "Measured on hardware" : "Live run"}</span></div></div>
+      <div><h1>{run.workspaceSnapshot.title}</h1><p>{date.format(new Date(run.startedAt))} · {run.machine.id} · {run.machine.arch} · {num.format(run.machine.threads)} threads · {num.format(run.rows.length)} results · {duration(run.startedAt, run.finishedAt)}</p>
+        <div className="result-status"><span className="chip">{statusLabel(run.status)}</span>{run.rows.length > 0 && <span className="chip">Measured on hardware</span>}</div></div>
       <div className="inline-controls">
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true }} className="control">Open in workbench</Link>
         <Link to="/bench" state={{ workspace: run.workspaceSnapshot, fresh: true, rerun: true }} className="control primary">Run again</Link>
-        <button className="control" type="button" disabled={!USE_MOCK_API} title={!USE_MOCK_API ? "Sharing is unavailable with the execution proxy." : undefined} onClick={() => setShare(true)}>Share</button>
         <details className="action-menu"><summary className="control"><DownloadSimpleIcon size={16} aria-hidden="true" /> Export</summary><div className="menu-panel">
           <button type="button" onClick={() => exportCsv(run)}>CSV</button>
           <button type="button" onClick={() => download(`benchscope-${run.id}.json`, new Blob([JSON.stringify(run, null, 2)], { type: "application/json" }))}>JSON</button>
@@ -293,15 +260,13 @@ function RunView({ run }: { run: Run }) {
       </div>
     </div>
     <div className="finding">{insight.value && <strong>{insight.value}</strong>}<p>{insight.text}</p></div>
-    {compareId && <div className="bench-banner"><span>{compare.isPending ? "Loading comparison…" : compare.isError ? "The comparison run could not be loaded." : compatible ? "Comparing the first lane of each run." : "These runs use different sweep parameters."}</span>
-      <button className="control" type="button" onClick={() => update("compare", "")}>Clear comparison</button></div>}
-    <InputComparison rows={comparison?.rows ?? run.rows} lanes={comparison?.lanes ?? run.workspaceSnapshot.lanes} metric={metric} stat={stat} />
+    <InputComparison rows={run.rows} lanes={run.workspaceSnapshot.lanes} metric={metric} stat={stat} />
     <div className="result-chart-grid">
       <div>
-        <div className="segmented chart-tabs" aria-label="Chart type">{chartTypes.map((value) => <button className="control" key={value} type="button" aria-pressed={value === chartType}
-          title={unavailable[value]} disabled={Boolean(unavailable[value])} onClick={() => update("chart", value)}>{chartLabels[value]}</button>)}</div>
+        {shownCharts.length > 1 && <div className="segmented chart-tabs" aria-label="Chart type">{shownCharts.map((value) => <button className="control" key={value} type="button" aria-pressed={value === chartType}
+          onClick={() => update("chart", value)}>{chartLabels[value]}</button>)}</div>}
         <Suspense fallback={<div className="instrument loading-plot" role="status">Loading chart…</div>}>
-          <Instrument title="Sweep results" rows={comparison?.rows ?? run.rows} lanes={comparison?.lanes ?? run.workspaceSnapshot.lanes} machine={run.machine} sweep={run.sweep}
+          <Instrument title="Sweep results" rows={run.rows} lanes={run.workspaceSnapshot.lanes} sweep={run.sweep}
             settings={settings} caption={unavailable[chartType] ?? chartCaptions[chartType]} tableHref="#results-table" onExport={(exportChart) => { exportRef.current = exportChart; }} />
         </Suspense>
       </div>
@@ -310,17 +275,16 @@ function RunView({ run }: { run: Run }) {
     <p className="help-text">Miss counters and per-iteration fault counts marked fastest/slowest belong to the corresponding timed iterations. A dash means the measurement is unavailable; a measured zero is shown as 0.</p>
     <ResultTable run={run} settings={settings} />
     <RunConfiguration run={run} />
-    {share && <ShareDialog workspace={run.workspaceSnapshot} runId={run.id} close={() => setShare(false)} />}
   </div>;
 }
 
 export default function Results() {
   const { runId = "" } = useParams();
-  const run = useQuery({ queryKey: ["run", runId], queryFn: ({ signal }) => getRun(runId, signal), refetchInterval: (query) => {
+  const run = useQuery({ queryKey: ["run", runId], queryFn: () => getRun(runId), refetchInterval: (query) => {
     const status = query.state.data?.status;
     return status && ["queued", "building", "running"].includes(status) ? 1000 : false;
   }, retry: false });
   if (run.isPending) return <div className="page results-page"><h1>Results</h1><div className="instrument loading-plot" role="status">Loading results…</div><EditorSkeleton text="Loading result rows…" /></div>;
-  if (run.isError) return <div className="page route-stub"><h1>Results</h1><p className="error-text" role="alert">{run.error.message}</p><div className="inline-controls"><button className="control" type="button" onClick={() => void run.refetch()}>Try again</button><Link className="control" to={USE_MOCK_API ? "/benches?tab=history" : "/bench"}>{USE_MOCK_API ? "Run history" : "Open workbench"}</Link></div></div>;
+  if (run.isError) return <div className="page route-stub"><h1>Results</h1><p className="error-text" role="alert">{run.error.message}</p><div className="inline-controls"><button className="control" type="button" onClick={() => void run.refetch()}>Try again</button><Link className="control" to="/bench">Open workbench</Link></div></div>;
   return <RunView run={run.data} key={runId} />;
 }
