@@ -55,6 +55,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "no measurements collected")
 		os.Exit(1)
 	}
+	var minTimeMS, maxTimeMS, avgTimeMS float64
+	if rep.CPUFreq > 0 {
+		msPerTick := 1000 / float64(rep.CPUFreq)
+		minTimeMS = float64(res.MinTime) * msPerTick
+		maxTimeMS = float64(res.MaxTime) * msPerTick
+		avgTimeMS = float64(res.TotalTime) / float64(res.Iterations()) * msPerTick
+	}
 	payload, err := json.Marshal(map[string]any{
 		"name": rep.Name,
 		"byte_count": rep.ByteCount,
@@ -63,6 +70,9 @@ func main() {
 		"run_window_ns": int64(rep.TryForTime),
 		"iterations": res.Iterations(),
 		"total_page_faults": res.TotalPageFaults(),
+		"min_time_ms": minTimeMS,
+		"max_time_ms": maxTimeMS,
+		"avg_time_ms": avgTimeMS,
 		"measurements": map[string]any{
 			"MinTime": res.MinTime,
 			"MaxTime": res.MaxTime,
@@ -98,9 +108,10 @@ type ExecutionConfig struct {
 	Cleanup       string
 }
 
-// BenchmarkResult preserves raw profiler measurements (times are CPU ticks).
-// RunWindowNS is in nanoseconds. Averages, milliseconds and throughput can be
-// derived from these values and are computed only when displaying the result.
+// BenchmarkResult includes raw profiler measurements (times are CPU ticks) and
+// per-iteration wall-clock times converted to milliseconds using TimerFrequency.
+// Millisecond fields are zero when TimerFrequency is unavailable.
+// RunWindowNS is in nanoseconds.
 type BenchmarkResult struct {
 	Name            string                `json:"name"`
 	ByteCount       uint64                `json:"byte_count"`
@@ -109,6 +120,9 @@ type BenchmarkResult struct {
 	RunWindowNS     int64                 `json:"run_window_ns"`
 	Iterations      int                   `json:"iterations"`
 	TotalPageFaults int64                 `json:"total_page_faults"`
+	MinTimeMS       float64               `json:"min_time_ms"`
+	MaxTimeMS       float64               `json:"max_time_ms"`
+	AvgTimeMS       float64               `json:"avg_time_ms"`
 	Measurements    BenchmarkMeasurements `json:"measurements"`
 }
 

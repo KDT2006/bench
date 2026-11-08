@@ -44,14 +44,15 @@ func TestBuildSweepMatrix(t *testing.T) {
 
 func TestBuildExecutionSourceCompiles(t *testing.T) {
 	source, err := BuildExecutionSource(ExecutionConfig{
-		Name:      "sort \"example\"\nbenchmark",
-		ByteCount: 24,
-		Fenced:    true,
-		Imports:   `"sort"`,
-		Globals:   `var sortedValues []int`,
-		Setup:     `values := []int{3, 1, 2}`,
-		Bench:     "sort.Ints(values)\nsortedValues = values",
-		Cleanup:   `if !sort.IntsAreSorted(sortedValues) { panic("unsorted") }`,
+		BenchDuration: time.Millisecond,
+		Name:          "sort \"example\"\nbenchmark",
+		ByteCount:     24,
+		Fenced:        true,
+		Imports:       `"sort"`,
+		Globals:       `var sortedValues []int`,
+		Setup:         `values := []int{3, 1, 2}`,
+		Bench:         "sort.Ints(values)\nsortedValues = values",
+		Cleanup:       `if !sort.IntsAreSorted(sortedValues) { panic("unsorted") }`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,13 +66,29 @@ func TestBuildExecutionSourceCompiles(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("compile generated source: %v\n%s", err, output)
 	}
+	output, err := exec.Command(filepath.Join(dir, "benchmark")).Output()
+	if err != nil {
+		t.Fatalf("run generated source: %v", err)
+	}
+	result, err := ParseBenchmarkResult(bytes.NewReader(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msPerTick := 1000 / float64(result.TimerFrequency)
+	if result.TimerFrequency == 0 || result.MinTimeMS <= 0 ||
+		result.MinTimeMS != float64(result.Measurements.MinTime)*msPerTick ||
+		result.MaxTimeMS != float64(result.Measurements.MaxTime)*msPerTick ||
+		result.AvgTimeMS != float64(result.Measurements.TotalTime)/float64(result.Iterations)*msPerTick {
+		t.Fatalf("unexpected millisecond conversion: %+v", result)
+	}
 }
 
 func TestParseBenchmarkResult(t *testing.T) {
 	want := BenchmarkResult{
 		Name: "addition", Iterations: 2, TimerFrequency: 1000,
 		TotalPageFaults: 3,
-		Measurements:    BenchmarkMeasurements{MinTime: 10, MaxTime: 20, TotalTime: 30},
+		MinTimeMS:       10, MaxTimeMS: 20, AvgTimeMS: 15,
+		Measurements: BenchmarkMeasurements{MinTime: 10, MaxTime: 20, TotalTime: 30},
 	}
 	payload, err := json.Marshal(want)
 	if err != nil {
@@ -131,11 +148,16 @@ func TestBenchmarkResultPrinting(t *testing.T) {
 	}
 }
 
-func TestBenchmarkResultJSONContainsOnlyRawMeasurements(t *testing.T) {
+func TestBenchmarkResultJSONFields(t *testing.T) {
 	result := BenchmarkResult{Iterations: 2, Measurements: BenchmarkMeasurements{MinTime: 10, MaxTime: 20, TotalTime: 30}}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, field := range []string{"min_time_ms", "max_time_ms", "avg_time_ms"} {
+		if !bytes.Contains(payload, []byte(`"`+field+`"`)) {
+			t.Errorf("missing millisecond field %s: %s", field, payload)
+		}
 	}
 	for _, field := range []string{"run_window_ms", "time_ms", "AvgTime", "GigabytesPerSecondMin", "GigabytesPerSecondMax", "GigabytesPerSecondAvg", "PageFaultCountAvg"} {
 		if bytes.Contains(payload, []byte(`"`+field+`"`)) {
