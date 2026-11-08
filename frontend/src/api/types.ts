@@ -29,6 +29,7 @@ export interface Lane {
   };
   build: BuildOptions;
   runner: RunnerOptions;
+  execution?: { byteCount: number; fenced: boolean };
 }
 
 export interface BuildOptions {
@@ -44,12 +45,12 @@ export interface RunnerOptions {
   warmup: number;
   core?: number;
   memLimitMb?: number;
-  counters: ("cycles" | "time" | "pageFaults" | "cacheMisses" | "throughput")[];
+  counters: ("cycles" | "time" | "pageFaults" | "cacheMisses" | "branchMisses" | "throughput")[];
 }
 
 export interface SweepParam {
   name: string;
-  values: (number | string)[];
+  values: number[];
 }
 
 export interface Run {
@@ -61,15 +62,17 @@ export interface Run {
   rows: ResultRow[];
   startedAt: string;
   finishedAt?: string;
+  source?: "live" | "mock";
 }
 
-export interface Stat { min: number; median: number; mean: number; p95: number; stddev: number; }
+export interface Stat { min?: number; max?: number; median?: number; mean?: number; p95?: number; stddev?: number; fastest?: number; slowest?: number; }
 
 export interface ResultRow {
   laneId: string;
   params: Record<string, number | string>;  // { N: 65536, stride: 8 }
   reps: number;
-  metrics: Partial<Record<"cycles" | "timeNs" | "pageFaults" | "cacheMisses" | "throughput", Stat>>;
+  metrics: Partial<Record<"cycles" | "timeNs" | "pageFaults" | "cacheMisses" | "branchMisses" | "throughput", Stat>>;
+  profiler?: ExecuteResult;
   samples?: number[];        // optional raw cycles per rep, for distribution charts
 }
 
@@ -77,17 +80,42 @@ export interface MachineSnapshot {
   id: string;
   arch: Arch;
   cpuModel: string;
-  cores: number; threads: number; smt: boolean;
-  baseMhz: number; boostMhz: number; governor: string; turbo: boolean;
+  cores?: number; threads: number; smt?: boolean;
+  baseMhz?: number; boostMhz?: number; governor?: string; turbo?: boolean;
   caches: { level: "L1d" | "L1i" | "L2" | "L3"; sizeBytes: number; lineSize: number; assoc?: number }[];
-  ramBytes: number; pageSize: number;
-  kernel: string; isolatedCores: number[]; perfCounters: boolean;
+  ramBytes?: number; pageSize?: number;
+  kernel?: string; isolatedCores: number[]; perfCounters?: boolean;
   toolchains: Record<string, string>;
+  os?: string;
+  languages?: Lang[];
 }
 
+export interface ProxyHealth {
+  status: string; hostname: string; os: string; arch: string; cpus: number; languages: string[];
+}
+export interface ExecuteRequest {
+  name: string; byteCount: number; fenced: boolean; code: string; language: Lang; arch: string;
+}
+export interface CounterAvailability { l1DataMisses: boolean; branchMisses: boolean; }
+export interface ExecuteResult {
+  name: string; byteCount: number; fenced: boolean; timerFrequency: number;
+  runWindowNanos: number; runWindowMillis: number; iterations: number; totalPageFaults: number;
+  counterAvailability: CounterAvailability;
+  timeMs: { min: number; max: number; avg: number; total: number };
+  measurements: {
+    numIterations: number; totalPageFaults: number;
+    MinTime: number; MaxTime: number; TotalTime: number; AvgTime: number;
+    GigabytesPerSecondMin: number; GigabytesPerSecondMax: number; GigabytesPerSecondAvg: number;
+    MajorPageFaultCountMin: number; MinorPageFaultCountMin: number;
+    MajorPageFaultCountMax: number; MinorPageFaultCountMax: number; PageFaultCountAvg: number;
+    L1DataMissMin: number; L1DataMissMax: number; BranchMisssMin: number; BranchMissMax: number;
+  };
+}
+export interface ExecuteResponse { results: ExecuteResult[]; }
+
 export interface Machine extends MachineSnapshot {
-  status: "idle" | "busy" | "offline";
-  queueLength: number;
+  status: "idle" | "busy" | "offline" | "ready";
+  queueLength?: number;
 }
 
 export interface ParseResponse {

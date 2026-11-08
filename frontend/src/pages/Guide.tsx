@@ -3,31 +3,34 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { primitives } from "../model/dsl";
 import { freshWorkspace } from "../model/state";
+import { assembleSections, directives as directiveNames, type Directive } from "../model/sections";
 import { starterWorkspace } from "../model/examples";
 
 const sections = [
   { id: "quick-start", title: "Quick start", copy: "Open the array sum example, read its sweep, then press Run. Open full results to compare the lanes against the machine’s cache boundaries." },
-  { id: "how-it-works", title: "How it works", copy: "Benchscope parses the sweep, generates a harness for each scaffold lane, builds the snapshot, and streams a result for each permutation. The local mock replays the array-sum fixture." },
+  { id: "how-it-works", title: "How it works", copy: "Benchscope parses the sweep, generates a harness for each scaffold lane, executes the snapshot, and returns a result for each permutation. The local mock replays the array-sum fixture." },
   { id: "directives", title: "Directives", copy: "Each directive starts a section. The runner reads #sweep itself. Code generation receives the remaining sections." },
   { id: "language", title: "Language constructs", copy: "Assign with name = expression. Use for i in 0..N: to iterate over indices and if condition: to branch. Indent the body when it spans multiple lines. Use // for comments." },
   { id: "data-structures", title: "Data structures", copy: "Read or write an array at arr[index] and a map at table[key]. Make data in #setup and keep the operation under test in #bench." },
   { id: "algorithms", title: "Algorithms", copy: "Compare sequential, binary, and hash-based lookups. Binary search requires sorted input." },
   { id: "syscalls", title: "Syscalls", copy: "Reserve memory and work with file handles. Keep initialization or cleanup outside the timed block unless it is the operation you intend to measure." },
   { id: "primitives", title: "Primitives", copy: "Use shared operations across languages. Go and Python expansions below are illustrative." },
-  { id: "metrics", title: "Metrics", copy: "Cycles count processor ticks, time uses nanoseconds, page faults count memory faults, cache misses count failed cache lookups, and throughput describes work per unit time when the harness reports it." },
-  { id: "reading-results", title: "Reading results", copy: "Use minimum cycles to estimate the cost with fewer interruptions. Median and p95 show typical and tail costs. Coefficient of variation divides standard deviation by the mean. Normalize by a size parameter to compare work per element." },
+  { id: "metrics", title: "Metrics", copy: "Timer ticks come from the processor timer, time uses nanoseconds, page faults count memory faults, L1 data-cache read misses and branch-prediction misses are recorded for the fastest and slowest timed iterations when the counters are available, and throughput describes work per unit time when the harness reports it." },
+  { id: "reading-results", title: "Reading results", copy: "Use minimum cycles to estimate the cost with fewer interruptions. Median and p95 are shown only when supplied by the runner. Coefficient of variation divides standard deviation by the mean. Normalize by a size parameter to compare work per element." },
   { id: "pitfalls", title: "Pitfalls", copy: "Compiler elimination, cold caches, page faults, garbage collection, and Python interpreter overhead can change what a short benchmark measures." },
-  { id: "code-mode", title: "Writing ejected harnesses", copy: "Choose Edit as code to edit the harness directly. Edit sweep inputs separately in the Sweep tab. The mock accepts the workspace and replays the fixture. The real runner’s parameter transport is still an open API decision." },
-  { id: "assembly", title: "Assembly and FFI", copy: "Add kernel.S and keep its syntax and calling convention aligned with the selected architecture. On x86_64 SysV the first integer arguments use registers such as rdi and rsi. On AArch64 they begin at x0." },
+  { id: "code-mode", title: "Writing ejected harnesses", copy: "Choose Edit as code to edit the harness directly. Edit sweep inputs separately in the Sweep tab. The mock accepts the workspace and replays the fixture. Live code mode accepts the same six directive sections with executable code; sweep values are injected by the executor." },
+  { id: "assembly", title: "Assembly and FFI", copy: "Add kernel.S and keep its syntax and calling convention aligned with the selected architecture. The live proxy does not accept assembly files. On x86_64 SysV the first integer arguments use registers such as rdi and rsi. On AArch64 they begin at x0." },
 ];
 
-const directives = [
-  ["#sweep", "List parameters and values. The runner forms the Cartesian product."],
-  ["#imports", "Describe dependencies the generated harness needs."],
-  ["#setup", "Prepare data once per permutation."],
-  ["#bench", "Run the measured work in each repetition."],
-  ["#clean", "Release resources after the permutation."],
-];
+const directiveCopy: Record<Directive, string> = {
+  imports: "Dependencies required by the generated code.",
+  globals: "Package-level variables and helper functions, including observable results.",
+  sweep: "Integer parameter lists, e.g. N: [1024, 4096]. The runner forms the Cartesian product.",
+  setup: "Prepare data before each measured iteration.",
+  bench: "Only this section is timed.",
+  cleanup: "Release resources after each measured iteration.",
+};
+const directives = directiveNames.map((name) => [`#${name}`, directiveCopy[name]]);
 
 const lists: Record<string, string[]> = {
   algorithms: ["linear_search", "binary_search", "hashmap_lookup"],
@@ -43,7 +46,7 @@ function Primitive({ entry }: { entry: typeof primitives[number] }) {
   const workspace = freshWorkspace(starterWorkspace());
   workspace.title = entry.name;
   const prep = preparations[entry.name];
-  workspace.lanes[0].files["benchmark.perf"] = `#sweep\nN = [1Ki, 4Ki]\n${prep ? `\n#setup\n${prep}\n` : ""}\n#bench\n${entry.example}\n`;
+  workspace.lanes[0].files["benchmark.perf"] = assembleSections({ sweep: "N: [1024, 4096]", setup: prep, bench: entry.example });
   return <article className="primitive-doc" id={entry.name}>
     <h3><a href={`#${entry.name}`}><code>{entry.signature}</code></a></h3>
     <p>{entry.description}</p>
@@ -78,7 +81,7 @@ export default function Guide() {
         {visible.length === 0 && <div className="empty-panel"><p>No guide entries match “{q}”.</p><button className="control" type="button" onClick={() => setParams({})}>Clear search</button></div>}
         {visible.map((section) => <section id={section.id} key={section.id}>
           <h2><a href={`#${section.id}`}>{section.title}</a></h2><p>{section.copy}</p>
-          {section.id === "quick-start" && <><pre><code>{'#sweep\nN = [1Ki, 64Ki, 1Mi]\n\n#setup\narr = random_array(N, 0, 255)\n\n#bench\ns = 0\nfor i in 0..N: s += arr[i]\nsink(s)'}</code></pre><Link className="control primary" to="/bench?example=sample-array-sum">Open in workbench</Link></>}
+          {section.id === "quick-start" && <><pre><code>{starterWorkspace().lanes[0].files["benchmark.perf"]}</code></pre><Link className="control primary" to="/bench?example=sample-array-sum">Open in workbench</Link></>}
           {section.id === "directives" && <dl className="directive-list">{directives.map(([token, meaning]) => <div key={token}><dt><code>{token}</code></dt><dd>{meaning}</dd></div>)}</dl>}
           {section.id === "how-it-works" && <div className="guide-flow"><span>DSL</span><span>Harness</span><span>Repetition tester</span><span>Results</span></div>}
           {section.id === "pitfalls" && <div className="guide-callout"><InfoIcon size={20} aria-hidden="true" /><p>Keep the result observable with <code>sink</code>. Move setup outside <code>#bench</code> unless setup is the operation you want to measure.</p></div>}

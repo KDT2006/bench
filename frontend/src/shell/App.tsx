@@ -8,6 +8,7 @@ import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
 import { ListIcon } from "@phosphor-icons/react/dist/csr/List";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
+import { USE_MOCK_API } from "../api/config";
 import { getMachines } from "../api/client";
 import { MachineDetails, MachineState } from "./MachineDetails";
 import { Overlay } from "./Overlay";
@@ -20,6 +21,7 @@ import { ShareDialog } from "../pages/ShareDialog";
 import { motion, useReducedMotion } from "motion/react";
 
 const Workbench = lazy(() => import("../bench/Workbench"));
+const Launch = lazy(() => import("../pages/Launch"));
 const Landing = lazy(() => import("../pages/Landing"));
 const Results = lazy(() => import("../pages/Results"));
 const Examples = lazy(() => import("../pages/Examples"));
@@ -54,6 +56,7 @@ function Toast() {
 }
 
 const nav = [
+  { path: "/welcome", label: "Welcome" },
   { path: "/bench", label: "Workbench" },
   { path: "/examples", label: "Examples" },
   { path: "/guide", label: "Guide" },
@@ -79,7 +82,7 @@ function useTheme() {
 }
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
-  return nav.map(({ path, label }) => (
+  return nav.map(({ path, label }) => !USE_MOCK_API && path === "/benches" ? <span key={path} aria-disabled="true" title="Library and persistent history are unavailable with the execution proxy.">{label}</span> : (
     <NavLink key={path} to={path} end onClick={onNavigate}>{label}</NavLink>
   ));
 }
@@ -131,11 +134,30 @@ function CommandPalette({ actions, shortcut }: { actions: Command[]; shortcut: s
   );
 }
 
+function LaunchRipple({ origin }: { origin: { left: number; top: number; size: number } }) {
+  const [finished, setFinished] = useState(false);
+  const reduced = useReducedMotion();
+  if (finished || reduced) return null;
+  const x = origin.left + origin.size / 2;
+  const y = origin.top + origin.size / 2;
+  const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+  // Overshoot the corners so the soft shadow reaches the entire viewport.
+  const scale = Math.max(1, 4 * radius / origin.size);
+  return <div className="launch-ripple" aria-hidden="true">
+    <motion.span style={{ left: origin.left, top: origin.top, width: origin.size, height: origin.size }}
+      initial={{ scale: 1, opacity: 0.65 }} animate={{ scale, opacity: [0.65, 0.5, 0.25, 0] }}
+      transition={{ scale: { duration: 1.4, ease: [0.25, 0.46, 0.45, 0.94] }, opacity: { duration: 1.4, ease: "linear", times: [0, 0.35, 0.7, 1] } }}
+      onAnimationComplete={() => setFinished(true)} />
+  </div>;
+}
+
 export function App() {
   useTheme();
   useDraftPersistence();
   const navigate = useNavigate();
-  const { pathname, hash } = useLocation();
+  const { pathname, hash, state, key } = useLocation();
+  const reduced = useReducedMotion();
+  const blendWorkbench = pathname === "/bench" && Boolean(state?.launchOrigin) && !reduced;
   const query = useQueryClient();
   const workbench = pathname === "/bench";
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -151,6 +173,8 @@ export function App() {
     return () => mobileQuery.removeEventListener("change", notify);
   }, () => mobileQuery.matches);
   const landing = pathname === "/";
+  const welcome = pathname === "/welcome";
+  useEffect(() => { document.title = landing ? "Bench.it" : "Benchscope"; }, [landing]);
   useEffect(() => { if (!hash) window.scrollTo(0, 0); }, [pathname, hash]);
   const mac = /Mac|iPad|iPhone/.test(navigator.platform);
   const shortcut = mac ? "⌘K" : "Ctrl+K";
@@ -208,15 +232,15 @@ export function App() {
   });
 
   const actions: Command[] = [
-    ...nav.map(({ path, label }) => ({ label: `Open ${label.toLowerCase()}`, run: () => { close(); navigate(path); } })),
+    ...nav.filter(({ path }) => USE_MOCK_API || path !== "/benches").map(({ path, label }) => ({ label: `Open ${label.toLowerCase()}`, run: () => { close(); navigate(path); } })),
     { label: "Show machine details", run: () => setDialog("machine") },
     { label: "Open settings", run: () => setDialog("settings") },
     { label: "Show keyboard shortcuts", shortcut: "?", run: () => setDialog("shortcuts") },
   ];
   if (workbench && !mobile) {
     if (!pending && (!isOffline || running)) actions.push({ label: running ? "Cancel run" : "Run bench", shortcut: mac ? "⌘↵" : "Ctrl+Enter", run: () => { close(); runOrStop(); } });
-    actions.push({ label: "Save bench", shortcut: mac ? "⌘S" : "Ctrl+S", run: () => { close(); save(); } });
-    actions.push({ label: "Share bench", run: () => { flushEditors(); setDialog("share"); } });
+    if (USE_MOCK_API) actions.push({ label: "Save bench", shortcut: mac ? "⌘S" : "Ctrl+S", run: () => { close(); save(); } });
+    if (USE_MOCK_API) actions.push({ label: "Share bench", run: () => { flushEditors(); setDialog("share"); } });
     if (lastRunId) actions.push({ label: "Open last results", run: () => { close(); navigate(`/results/${lastRunId}`); } });
   }
   const dialogTitles = { settings: "Settings", machine: "Machine", commands: "Command palette", shortcuts: "Keyboard shortcuts", menu: "Navigation", share: "Share bench" };
@@ -224,12 +248,12 @@ export function App() {
   return (
     <>
       <a className="skip-link control primary" href="#main">Skip to content</a>
-      {landing ? <header className="landing-nav">
+      {landing || welcome ? <header className={`landing-nav${landing ? " launch-nav" : ""}`}>
         <Brand />
-        <nav aria-label="Main navigation"><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link></nav>
+        <nav aria-label="Main navigation"><NavLink to="/welcome">Welcome</NavLink>{!landing && <><Link to="/examples">Examples</Link><Link to="/guide">Guide</Link></>}</nav>
         <button type="button" className="control icon-control landing-settings" aria-label="Settings" title="Settings" onClick={() => setDialog("settings")}><GearIcon size={20} aria-hidden="true" /></button>
-        <Link className="control primary" to="/bench" onMouseEnter={() => void import("../bench/Workbench")} onFocus={() => void import("../bench/Workbench")}>Open the workbench</Link>
-      </header> : <header className="top-bar">
+        {!landing && <Link className="control primary" to="/bench" onMouseEnter={() => void import("../bench/Workbench")} onFocus={() => void import("../bench/Workbench")}>Open the workbench</Link>}
+      </header> : <header className={`top-bar${blendWorkbench ? " bench-enter" : ""}`}>
         <div className="top-bar-inner">
           <Brand />
           <nav className="desktop-nav" aria-label="Main navigation"><NavLinks /></nav>
@@ -255,8 +279,8 @@ export function App() {
             </button>
             {workbench && <div className="workbench-actions" aria-label="Workbench actions">
               {renderRunControl(true)}
-              <button className="control" type="button" disabled={mobile} onClick={save}>Save</button>
-              <button className="control" type="button" onClick={() => { flushEditors(); setDialog("share"); }}>Share</button>
+              <button className="control" type="button" disabled={mobile || !USE_MOCK_API} title={!USE_MOCK_API ? "Saving is unavailable with the execution proxy." : undefined} onClick={save}>Save</button>
+              <button className="control" type="button" disabled={!USE_MOCK_API} title={!USE_MOCK_API ? "Sharing is unavailable with the execution proxy." : undefined} onClick={() => { flushEditors(); setDialog("share"); }}>Share</button>
             </div>}
             <button type="button" className="control icon-control command-trigger" onClick={() => setDialog("commands")} aria-label="Command palette" title={`Command palette (${shortcut})`}>
               <CommandIcon size={20} aria-hidden="true" />
@@ -270,20 +294,22 @@ export function App() {
           </div>
         </div>
       </header>}
-      <main id="main" tabIndex={-1}>
+      <main id="main" tabIndex={-1} className={blendWorkbench ? "bench-enter" : undefined}>
         <Suspense fallback={<div className="page route-loading loading-state" role="status"><span className="sr-only">Loading page…</span><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>}>
           <Routes>
-            <Route path="/" element={<Landing />} />
+            <Route path="/" element={<Launch />} />
+            <Route path="/welcome" element={<Landing />} />
             <Route path="/bench" element={<Workbench machines={machines.data} runControl={renderRunControl(false)} />} />
             <Route path="/results/:runId" element={<Results />} />
             <Route path="/examples" element={<Examples />} />
             <Route path="/guide" element={<Guide />} />
-            <Route path="/benches" element={<Library />} />
-            <Route path="/s/:shareId" element={<Shared />} />
+            <Route path="/benches" element={USE_MOCK_API ? <Library /> : <RouteStub title="Library unavailable">The execution proxy does not store benches or persistent run history. Live results remain available in this tab.</RouteStub>} />
+            <Route path="/s/:shareId" element={USE_MOCK_API ? <Shared /> : <RouteStub title="Sharing unavailable">The execution proxy does not provide shared benches.</RouteStub>} />
             <Route path="*" element={<RouteStub title="Page not found">Check the address or open the workbench.</RouteStub>} />
           </Routes>
         </Suspense>
       </main>
+      {blendWorkbench && <LaunchRipple key={key} origin={state.launchOrigin} />}
       <Toast />
       {dialog === "share" && <ShareDialog workspace={useBench.getState().workspace} runId={lastRunId} close={close} />}
       {dialog && dialog !== "share" && (

@@ -2,7 +2,8 @@ import type { Lang, Machine, MachineSnapshot, Run, RunEvent, ShareSnapshot, Work
 import machineJson from "./fixtures/machine.json";
 import runJson from "./fixtures/run.json";
 import { exampleFixtures } from "../src/model/examples";
-import { parseSweep } from "../src/model/sweep";
+import { assembleSections, parseSections, SCAFFOLD_FORMAT_VERSION } from "../src/model/sections";
+import { parseSweep, serializeSweep } from "../src/model/sweep";
 import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "../src/model/scaffoldLimits";
 import { ScaffoldGenerationError, type ScaffoldGenerator } from "../server/gemini";
 
@@ -189,6 +190,7 @@ export function makeMockApi(storage: MockStorage, scaffoldCache = new Set<string
       if (!get && origin && origin !== url.origin) throw new ApiError(403, "Send write requests from the Benchscope origin.");
       if (extra) throw new ApiError(404, "No mock API resource matches this request.");
 
+      if (!id && get && resource === "health") return json({ status: "ok", hostname: machine.id, os: "linux", arch: machine.arch === "x86_64" ? "amd64" : "arm64", cpus: machine.threads, languages: ["go", "python"] });
       if (!id && get && resource === "machines") {
         const active = await storage.list<Replay>("run", Date.now());
         const entry: Machine = { ...machine, status: active.length ? "busy" : "idle", queueLength: active.filter((run) => Date.now() - run.started < delay).length };
@@ -207,16 +209,20 @@ export function makeMockApi(storage: MockStorage, scaffoldCache = new Set<string
         }
         if (scaffoldLength(dsl) > MAX_SCAFFOLD_CHARACTERS) throw new ApiError(413, scaffoldLimitMessage);
         if (!dsl.trim()) throw new ApiError(400, "Enter benchmark pseudocode before generating code.");
+        const document = parseSections(dsl);
+        const parsed = parseSweep(dsl);
+        if (document.errors.length || parsed.errors.length) throw new ApiError(400, document.errors[0]?.message ?? parsed.errors[0]);
         if (generateScaffold) return json(await generateScaffold({ dsl, language, arch }));
         const source = dsl.replace(/^#sweep\b[^\n]*\n[\s\S]*?(?=^#\w|$(?![\s\S]))/gm, "");
         const model = "mock-array-sum";
-        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([source, language, arch, model])));
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([SCAFFOLD_FORMAT_VERSION, source, language, arch, model])));
         const key = new Uint8Array(digest).join(".");
         const cached = scaffoldCache.has(key);
         if (scaffoldCache.size >= 256) scaffoldCache.clear();
         scaffoldCache.add(key);
         const file = ({ go: "harness.go", python: "harness.py" } as const)[language as Lang];
-        const code = sample.workspaceSnapshot.lanes.find((lane) => lane.language === language)?.files[file];
+        const sampleCode = sample.workspaceSnapshot.lanes.find((lane) => lane.language === language)!.files[file]!;
+        const code = assembleSections({ ...parseSections(sampleCode).sections, sweep: serializeSweep(parsed.sweep) });
         return json({ code, warnings: ["The mock returns the sample array-sum scaffold."], cached, model });
       }
 

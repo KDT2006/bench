@@ -73,6 +73,7 @@ func main() {
 		"min_time_ms": minTimeMS,
 		"max_time_ms": maxTimeMS,
 		"avg_time_ms": avgTimeMS,
+		"counter_availability": res.CounterAvailability,
 		"measurements": map[string]any{
 			"MinTime": res.MinTime,
 			"MaxTime": res.MaxTime,
@@ -113,17 +114,18 @@ type ExecutionConfig struct {
 // Millisecond fields are zero when TimerFrequency is unavailable.
 // RunWindowNS is in nanoseconds.
 type BenchmarkResult struct {
-	Name            string                `json:"name"`
-	ByteCount       uint64                `json:"byte_count"`
-	Fenced          bool                  `json:"fenced"`
-	TimerFrequency  uint64                `json:"timer_frequency"`
-	RunWindowNS     int64                 `json:"run_window_ns"`
-	Iterations      int                   `json:"iterations"`
-	TotalPageFaults int64                 `json:"total_page_faults"`
-	MinTimeMS       float64               `json:"min_time_ms"`
-	MaxTimeMS       float64               `json:"max_time_ms"`
-	AvgTimeMS       float64               `json:"avg_time_ms"`
-	Measurements    BenchmarkMeasurements `json:"measurements"`
+	CounterAvailability profiler.CounterAvailability `json:"counter_availability"`
+	Name                string                       `json:"name"`
+	ByteCount           uint64                       `json:"byte_count"`
+	Fenced              bool                         `json:"fenced"`
+	TimerFrequency      uint64                       `json:"timer_frequency"`
+	RunWindowNS         int64                        `json:"run_window_ns"`
+	Iterations          int                          `json:"iterations"`
+	TotalPageFaults     int64                        `json:"total_page_faults"`
+	MinTimeMS           float64                      `json:"min_time_ms"`
+	MaxTimeMS           float64                      `json:"max_time_ms"`
+	AvgTimeMS           float64                      `json:"avg_time_ms"`
+	Measurements        BenchmarkMeasurements        `json:"measurements"`
 }
 
 // BenchmarkMeasurements contains raw aggregates only. Fault and hardware-counter
@@ -175,7 +177,17 @@ func PrintBenchmarkResult(out io.Writer, result BenchmarkResult) error {
 	fmt.Fprintf(&report, "Page faults: fastest=%d  slowest=%d  avg=%.6f\r\n",
 		m.MajorPageFaultCountMin+m.MinorPageFaultCountMin,
 		m.MajorPageFaultCountMax+m.MinorPageFaultCountMax, avgPageFaults)
-	fmt.Fprint(&report, "L1 data misses: unavailable\r\nBranch mispredictions: unavailable\r\n\r\n")
+	if result.CounterAvailability.L1DataMisses {
+		fmt.Fprintf(&report, "L1 data-cache misses: fastest=%d  slowest=%d\r\n", m.L1DataMissMin, m.L1DataMissMax)
+	} else {
+		fmt.Fprint(&report, "L1 data-cache misses: unavailable\r\n")
+	}
+	if result.CounterAvailability.BranchMisses {
+		fmt.Fprintf(&report, "Branch-prediction misses: fastest=%d  slowest=%d\r\n", m.BranchMisssMin, m.BranchMissMax)
+	} else {
+		fmt.Fprint(&report, "Branch-prediction misses: unavailable\r\n")
+	}
+	fmt.Fprint(&report, "\r\n")
 	_, err := io.WriteString(out, report.String())
 	return err
 }
@@ -402,7 +414,7 @@ func RunSweep(ctx context.Context, cfg ExecutionConfig) ([]BenchmarkResult, erro
 		assignments := make([]string, len(row))
 		for i, value := range row {
 			assignments[i] = fmt.Sprintf("%s=%d", variables[i], value)
-			fmt.Fprintf(&setup, "%s := %d\n", variables[i], value)
+			fmt.Fprintf(&setup, "%s := %d\n_ = %s\n", variables[i], value, variables[i])
 		}
 		setup.WriteString(cfg.Setup)
 		runCfg := cfg

@@ -174,7 +174,7 @@ test("Gemini receives benchmark parameters and the API enforces 250 characters b
     ] } }] });
   };
   const api = makeMockApi({}, undefined, createGeminiScaffold("test-key", "demo-model", fakeGemini));
-  const dsl = "#sweep\nN = [1, 2]\n\n#bench\nsink(N)".padEnd(250);
+  const dsl = "#sweep\nN: [1, 2]\n\n#bench\nsink(N)".padEnd(250);
   const scaffold = (dsl, language) => api(new Request("http://localhost/api/scaffold", {
     method: "POST", body: JSON.stringify({ dsl, language, arch: "x86_64" }),
   }));
@@ -203,7 +203,7 @@ test("Gemini quota and invalid output return actionable errors", async () => {
 
 test("sweeps accept 256 combinations and reject a larger cross product", async () => {
   const values = Array.from({ length: 16 }, (_, index) => index + 1);
-  const dsl = (width) => `#sweep\nN = [${values}]\nstride = [${width === 16 ? values : [...values, 17]}]\n#bench\nsink(N)\n`;
+  const dsl = (width) => `#sweep\nN: [${values}]\nstride: [${width === 16 ? values : [...values, 17]}]\n#bench\nsink(N)\n`;
   const valid = await (await request("/parse", "POST", { dsl: dsl(16) })).json();
   assert.equal(valid.permutations, 256);
   assert.deepEqual(valid.errors, []);

@@ -1,3 +1,4 @@
+import { USE_MOCK_API } from "../api/config";
 import type { Lane, Machine, RunnerOptions } from "../api/types";
 import { languages } from "../model/format";
 import { useBench } from "../model/state";
@@ -5,7 +6,7 @@ import { Overlay } from "../shell/Overlay";
 
 const counters: { value: RunnerOptions["counters"][number]; label: string }[] = [
   { value: "cycles", label: "Cycles" }, { value: "time", label: "Time" }, { value: "pageFaults", label: "Page faults" },
-  { value: "cacheMisses", label: "Cache misses" }, { value: "throughput", label: "Throughput" },
+  { value: "cacheMisses", label: "L1 data-cache misses" }, { value: "branchMisses", label: "Branch-prediction misses" }, { value: "throughput", label: "Throughput" },
 ];
 
 export default function LaneOptions({ lane, machine, close }: { lane: Lane; machine?: Machine; close: () => void }) {
@@ -22,6 +23,21 @@ export default function LaneOptions({ lane, machine, close }: { lane: Lane; mach
     { key: "memLimitMb", label: "Memory limit (MiB)", min: 1 },
   ] as const;
 
+  if (!USE_MOCK_API) return <Overlay title={`Lane ${lane.label} options`} drawer onClose={close}>
+    <div className="overlay-body lane-options">
+      <section><h3>Execution</h3>
+        <label>Bytes per iteration<input type="number" min={0} max={Number.MAX_SAFE_INTEGER} step={1} value={lane.execution?.byteCount ?? 0} onChange={(event) => {
+          if (event.target.validity.valid && Number.isSafeInteger(event.target.valueAsNumber)) change(lane.id, (current) => ({ ...current, execution: { byteCount: event.target.valueAsNumber, fenced: current.execution?.fenced ?? true } }));
+        }} /></label>
+        <label className="check-setting"><input type="checkbox" checked={lane.execution?.fenced ?? true} onChange={(event) => change(lane.id, (current) => ({ ...current, execution: { byteCount: current.execution?.byteCount ?? 0, fenced: event.target.checked } }))} /> Fenced timer reads</label>
+        <p className="help-text">A byte count of zero leaves throughput unavailable. Timing and fault counts are always measured. L1 data-cache misses and branch-prediction misses are collected when supported.</p>
+      </section>
+      <fieldset disabled><legend>Server-managed settings</legend><p className="help-text">The proxy does not accept compiler flags, environment variables, assembly files, repetition limits, warmup, memory limits or core selection. These controls are unavailable; execution uses the server defaults.</p>
+        <button type="button" className="control">Build and runner settings unavailable</button>
+      </fieldset>
+      <div className="dialog-actions"><button className="control primary" type="button" onClick={close}>Done</button></div>
+    </div>
+  </Overlay>;
   return <Overlay title={`Lane ${lane.label} options`} drawer onClose={close}>
     <div className="overlay-body lane-options">
       <section>

@@ -3,8 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { request } from "../api/client";
-import type { Example } from "../api/types";
+import { getExamples } from "../api/client";
 import { expectations, sampleRun } from "../model/examples";
 import { languages, num } from "../model/format";
 
@@ -17,7 +16,7 @@ export default function Examples() {
   const language = params.get("language") ?? "";
   const arch = params.get("arch") ?? "";
   const search = params.get("q") ?? "";
-  const examples = useQuery({ queryKey: ["examples"], queryFn: ({ signal }) => request<Example[]>("/examples", { signal }), retry: false });
+  const examples = useQuery({ queryKey: ["examples"], queryFn: ({ signal }) => getExamples(signal), retry: false });
   const matching = examples.data?.filter(({ category: group, workspace, description }) => (!category || category === group) &&
     workspace.lanes.some((lane) => (!language || lane.language === language) && (!arch || lane.arch === arch)) &&
     `${workspace.title} ${description}`.toLowerCase().includes(search.trim().toLowerCase())) ?? [];

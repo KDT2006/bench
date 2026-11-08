@@ -9,7 +9,7 @@ export const laneColors = { A: "#E6A23C", B: "#5DB7EA", C: "#D486B2", D: "#2FBF9
 export const laneVar = (lane: Lane["label"]) => `var(--lane-${lane.toLowerCase()})`;
 export const languages = { go: "Go", python: "Python" };
 export const harness = (language: Lane["language"]) => language === "go" ? "harness.go" : "harness.py";
-export const metricNames = { cycles: "Cycles", timeNs: "Time (ns)", pageFaults: "Page faults", cacheMisses: "Cache misses", throughput: "Throughput" };
+export const metricNames = { cycles: "Timer ticks", timeNs: "Time (ns)", pageFaults: "Page faults", cacheMisses: "L1 data-cache misses", branchMisses: "Branch-prediction misses", throughput: "Throughput" };
 export type Metric = keyof typeof metricNames;
 export type Statistic = keyof Stat;
 

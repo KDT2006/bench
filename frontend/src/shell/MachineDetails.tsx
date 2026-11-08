@@ -6,7 +6,8 @@ import type { Machine } from "../api/types";
 
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
-function size(bytes: number) {
+function size(bytes: number | undefined) {
+  if (bytes === undefined) return "Unavailable";
   const unit = [[1024 ** 3, "GiB"], [1024 ** 2, "MiB"], [1024, "KiB"], [1, "B"]] as const;
   const [factor, label] = unit.find(([factor]) => bytes >= factor) ?? unit[3];
   return `${number.format(bytes / factor)} ${label}`;
@@ -35,7 +36,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 
 function Readouts({ rows }: { rows: [string, ReactNode][] }) {
   return <dl className="readouts">{rows.map(([label, value]) => (
-    <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+    <div key={label}><dt>{label}</dt><dd>{value ?? "Unavailable"}</dd></div>
   ))}</dl>;
 }
 
@@ -50,15 +51,15 @@ export function MachineDetails({ machine, frozen = false }: { machine: Machine; 
       {USE_MOCK_API && <p className="source-note">Sample snapshot from the local mock API.</p>}
       <Group title="CPU">
         <Readouts rows={[
-          ["Cores", number.format(machine.cores)], ["Threads", number.format(machine.threads)], ["SMT", machine.smt ? "On" : "Off"],
+          ["Cores", machine.cores === undefined ? "Unavailable" : number.format(machine.cores)], ["Threads", number.format(machine.threads)], ["SMT", machine.smt === undefined ? "Unavailable" : machine.smt ? "On" : "Off"],
         ]} />
       </Group>
       <Group title="Clocks">
         <Readouts rows={[
-          ["Base", `${number.format(machine.baseMhz / 1000)} GHz`],
-          ["Boost", `${number.format(machine.boostMhz / 1000)} GHz`],
+          ["Base", machine.baseMhz === undefined ? "Unavailable" : `${number.format(machine.baseMhz / 1000)} GHz`],
+          ["Boost", machine.boostMhz === undefined ? "Unavailable" : `${number.format(machine.boostMhz / 1000)} GHz`],
           ["Governor", machine.governor],
-          ["Turbo", machine.turbo ? "On" : "Off"],
+          ["Turbo", machine.turbo === undefined ? "Unavailable" : machine.turbo ? "On" : "Off"],
         ]} />
       </Group>
       <Group title="Caches">
@@ -81,17 +82,17 @@ export function MachineDetails({ machine, frozen = false }: { machine: Machine; 
       <Group title="Operating system">
         <Readouts rows={[
           ["Kernel", machine.kernel],
-          ["Isolated cores", machine.isolatedCores.map((core) => number.format(core)).join(", ") || "None"],
-          ["Perf counters", machine.perfCounters ? "Available" : "Unavailable"],
+          ["Isolated cores", machine.os ? "Unavailable" : machine.isolatedCores.map((core) => number.format(core)).join(", ") || "None"],
+          ["Perf counters", machine.perfCounters === undefined ? "Reported per result" : machine.perfCounters ? "Available" : "Unavailable"],
         ]} />
       </Group>
       <Group title="Toolchains">
-        <Readouts rows={Object.entries(machine.toolchains)} />
+        <Readouts rows={Object.entries(machine.toolchains).length ? Object.entries(machine.toolchains) : [["Toolchain versions", "Unavailable"]]} />
       </Group>
       {!frozen && <Group title="Live state">
-        <Readouts rows={[["Status", machine.status], ["Queue length", number.format(machine.queueLength)]]} />
+        <Readouts rows={[["Status", machine.status], ["Queue length", machine.queueLength === undefined ? "Unavailable" : number.format(machine.queueLength)]]} />
       </Group>}
-      {(machine.turbo || machine.governor !== "performance" || !machine.isolatedCores.length) && (
+      {(!machine.os && (machine.turbo || machine.governor !== "performance" || !machine.isolatedCores.length)) && (
         <div className="noise-note">
           <WarningIcon size={16} aria-hidden="true" />
           <div>

@@ -12,8 +12,8 @@
         "arch": "x86_64",
         "mode": "scaffold",
         "files": {
-          "benchmark.perf": "#sweep\nN = [1Ki, 2Ki, 4Ki, 8Ki, 16Ki, 32Ki, 64Ki, 128Ki, 256Ki, 512Ki, 1Mi, 2Mi, 4Mi, 8Mi, 16Mi, 32Mi, 64Mi]\n\n#setup\narr = random_array(N, 0, 255)\n\n#bench\ns = 0\nfor i in 0..N: s += arr[i]\nsink(s)\n",
-          "harness.go": "package main\n\n// Array sum scaffold for the sample replay.\nfunc benchmark(arr []byte) uint64 {\n\tvar sum uint64\n\tfor _, value := range arr {\n\t\tsum += uint64(value)\n\t}\n\treturn sum\n}\n"
+          "benchmark.perf": "#imports\n\n#globals\n\n#sweep\nN:[1024,2048,4096,8192,16384,32768,65536,131072,262144,524288,1048576,2097152,4194304,8388608,16777216,33554432,67108864]\n\n#setup\na=random_array(N,0,255)\n\n#bench\ns=0\nfor i in 0..N:s+=a[i]\nsink(s)\n\n#cleanup\n",
+          "harness.go": "#imports\n\n#globals\nvar sumSink uint64\n\n#sweep\nN: [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864]\n\n#setup\narr := make([]byte, N)\nfor i := range arr { arr[i] = byte(i) }\n\n#bench\nvar sum uint64\nfor _, value := range arr { sum += uint64(value) }\nsumSink = sum\n\n#cleanup\narr = nil\n"
         },
         "build": {
           "toolchainVersion": "go1.23",
@@ -38,8 +38,8 @@
         "arch": "x86_64",
         "mode": "scaffold",
         "files": {
-          "benchmark.perf": "#sweep\nN = [1Ki, 2Ki, 4Ki, 8Ki, 16Ki, 32Ki, 64Ki, 128Ki, 256Ki, 512Ki, 1Mi, 2Mi, 4Mi, 8Mi, 16Mi, 32Mi, 64Mi]\n\n#setup\narr = random_array(N, 0, 255)\n\n#bench\ns = 0\nfor i in 0..N: s += arr[i]\nsink(s)\n",
-          "harness.py": "# Array sum scaffold for the sample replay.\ndef benchmark(arr: bytearray) -> int:\n    total = 0\n    for value in arr:\n        total += value\n    return total\n"
+          "benchmark.perf": "#imports\n\n#globals\n\n#sweep\nN:[1024,2048,4096,8192,16384,32768,65536,131072,262144,524288,1048576,2097152,4194304,8388608,16777216,33554432,67108864]\n\n#setup\na=random_array(N,0,255)\n\n#bench\ns=0\nfor i in 0..N:s+=a[i]\nsink(s)\n\n#cleanup\n",
+          "harness.py": "#imports\n\n#globals\nsum_sink = 0\n\n#sweep\nN: [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864]\n\n#setup\narr = bytearray(i % 256 for i in range(N))\n\n#bench\nsum_sink = sum(arr)\n\n#cleanup\ndel arr\n"
         },
         "build": {
           "toolchainVersion": "cpython3.13",

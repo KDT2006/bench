@@ -12,10 +12,11 @@ import { tags } from "@lezer/highlight";
 import type { FileName } from "../api/types";
 import { builtins, diagnostics, directives, primitives } from "../model/dsl";
 import { parseSweep } from "../model/sweep";
+import { sectionPattern } from "../model/sections";
 import { usePreferences } from "../shell/preferences";
 import { editorFlushes } from "./editorSync";
 
-const section = /^\s*#(sweep|imports|setup|bench|clean)\b/;
+const section = sectionPattern;
 const dslLanguage = StreamLanguage.define({
   token(stream) {
     if (stream.sol() && stream.match(section)) return "keyword";
@@ -67,9 +68,7 @@ const rulePlugin = ViewPlugin.fromClass(class {
   update(update: ViewUpdate) { if (update.docChanged || update.viewportChanged) this.decorations = rules(update.view); }
 }, { decorations: (plugin) => plugin.decorations });
 
-const dslExtras = [
-  dslLanguage, rulePlugin,
-  foldService.of((state, from, to) => {
+const sectionFolding = foldService.of((state, from, to) => {
     if (!section.test(state.doc.lineAt(from).text)) return null;
     let end = to;
     for (let i = state.doc.lineAt(from).number + 1; i <= state.doc.lines; i++) {
@@ -78,7 +77,10 @@ const dslExtras = [
       end = line.to;
     }
     return end > to ? { from: to, to: end } : null;
-  }),
+  });
+
+const dslExtras = [
+  dslLanguage, rulePlugin, sectionFolding,
   autocompletion({ override: [(context) => {
     const word = context.matchBefore(/[#\w]+/);
     if (!word && !context.explicit) return null;
@@ -110,7 +112,7 @@ const dslExtras = [
 ];
 
 const language = (file: FileName): Extension => file === "benchmark.perf" ? dslExtras
-  : file === "harness.go" ? go() : file === "harness.py" ? python() : asmLanguage;
+  : file === "harness.go" ? [go(), rulePlugin, sectionFolding] : file === "harness.py" ? [python(), rulePlugin, sectionFolding] : asmLanguage;
 
 interface Props {
   file: FileName;

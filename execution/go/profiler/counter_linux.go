@@ -8,8 +8,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// disable counter initially and don't measure in kernel space or hypervisor
-const bitFields = unix.PerfBitDisabled | unix.PerfBitExcludeKernel | unix.PerfBitExcludeHv
+// Pin events so unscheduled counters fail instead of reporting unscaled,
+// multiplexed counts. Count user-space work only.
+const bitFields = unix.PerfBitDisabled | unix.PerfBitPinned | unix.PerfBitExcludeKernel | unix.PerfBitExcludeHv
 
 // eventConfig maps linux generic event types to perf events
 var eventConfig = map[Event]*unix.PerfEventAttr{
@@ -50,7 +51,9 @@ type linuxCounter struct {
 }
 
 func (l *linuxCounter) Start() error {
-	unix.IoctlSetInt(l.fd, unix.PERF_EVENT_IOC_RESET, 0)
+	if err := unix.IoctlSetInt(l.fd, unix.PERF_EVENT_IOC_RESET, 0); err != nil {
+		return err
+	}
 	return unix.IoctlSetInt(l.fd, unix.PERF_EVENT_IOC_ENABLE, 0)
 }
 
@@ -60,8 +63,12 @@ func (l *linuxCounter) Stop() error {
 
 func (l *linuxCounter) Read() (int64, error) {
 	var buf [8]byte
-	if _, err := unix.Read(l.fd, buf[:]); err != nil {
+	n, err := unix.Read(l.fd, buf[:])
+	if err != nil {
 		return 0, err
+	}
+	if n != len(buf) {
+		return 0, fmt.Errorf("short hardware counter read: %d bytes", n)
 	}
 
 	return int64(binary.LittleEndian.Uint64(buf[:])), nil

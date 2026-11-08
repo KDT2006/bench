@@ -1,10 +1,13 @@
 import { startTransition, useEffect } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import { cancelRun, generateScaffold, getRun, send, startRun, subscribeToRun } from "../api/client";
+import { cancelRun, execute, generateScaffold, getMachines, getRun, send, startRun, subscribeToRun } from "../api/client";
 import type { Lane, Run, RunEvent, Workspace } from "../api/types";
 import { usePreferences } from "../shell/preferences";
+import { USE_MOCK_API } from "../api/config";
+import { liveRuns, resultRow } from "../api/live";
+import { assembleSections, parseSections, SCAFFOLD_FORMAT_VERSION } from "./sections";
+import { parseSweep, serializeSweep, sweepMatrix } from "./sweep";
 import { diagnostics } from "./dsl";
-import { parseSweep } from "./sweep";
 import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "./scaffoldLimits";
 import { harness, languages, num } from "./format";
 import { saveDraft, useBench, writeLocal } from "./state";
@@ -14,7 +17,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : "Th
 const sourceOf = (lane: Lane) => lane.files["benchmark.perf"] ?? "";
 
 export function scaffoldKey(lane: Lane) {
-  const source = JSON.stringify([sourceOf(lane), lane.language, lane.arch]);
+  const source = JSON.stringify([SCAFFOLD_FORMAT_VERSION, sourceOf(lane), lane.language, lane.arch]);
   let hash = 2166136261;
   for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
   return (hash >>> 0).toString(16);
@@ -24,11 +27,11 @@ export function isStale(lane: Lane) {
   return lane.mode === "scaffold" && (!lane.files[harness(lane.language)] || scaffoldKey(lane) !== lane.scaffold?.dslHash);
 }
 
-async function generate(lane: Lane, reportFailure: boolean): Promise<Lane> {
+async function generate(lane: Lane, reportFailure: boolean, signal?: AbortSignal): Promise<Lane> {
   if (state().generating.includes(lane.id)) throw new Error(`Lane ${lane.label} is already generating code.`);
   useBench.setState((previous) => ({ generating: [...previous.generating, lane.id] }));
   try {
-    const result = await generateScaffold({ dsl: sourceOf(lane), language: lane.language, arch: lane.arch });
+    const result = await generateScaffold({ dsl: sourceOf(lane), language: lane.language, arch: lane.arch }, signal);
     const file = harness(lane.language);
     const next = { ...lane, files: { ...lane.files, [file]: result.code }, scaffold: {
       dslHash: scaffoldKey(lane), model: result.model, cached: result.cached, warnings: result.warnings,
@@ -47,6 +50,7 @@ async function generate(lane: Lane, reportFailure: boolean): Promise<Lane> {
 }
 
 export async function generateLane(lane: Lane) {
+  if (state().pending) return state().notify({ text: "Wait for the current run before generating code.", error: true });
   const dsl = sourceOf(lane);
   if (scaffoldLength(dsl) > MAX_SCAFFOLD_CHARACTERS) return state().notify({ text: scaffoldLimitMessage, error: true });
   const errors = diagnostics(dsl);
@@ -119,7 +123,102 @@ async function settle(id: string, query: QueryClient, error?: string) {
   }
 }
 
+let liveController: AbortController | undefined;
+
+async function runLive(query: QueryClient) {
+  const current = state();
+  if (current.pending || liveController || (current.active && !isFinished(current.active.status))) return;
+  if (current.generating.length) return current.notify({ text: "Wait for code generation to finish.", error: true });
+  const snapshot = structuredClone(current.workspace);
+  snapshot.title = snapshot.title.trim() || "Untitled bench";
+  for (const lane of snapshot.lanes) {
+    const dsl = sourceOf(lane);
+    const issues = lane.mode === "scaffold" ? diagnostics(dsl) : [...parseSections(dsl).errors,
+      ...parseSweep(dsl).errors.map((message) => ({ message }))];
+    if (issues.length) return current.notify({ text: `Lane ${lane.label}: ${issues[0].message}`, error: true });
+    if (isStale(lane) && scaffoldLength(dsl) > MAX_SCAFFOLD_CHARACTERS) return current.notify({ text: `Lane ${lane.label}: ${scaffoldLimitMessage}`, error: true });
+    if (lane.files["kernel.S"]) return current.notify({ text: `Lane ${lane.label}: the execution proxy does not accept assembly files.`, error: true });
+    if (lane.execution && (!Number.isSafeInteger(lane.execution.byteCount) || lane.execution.byteCount < 0 || typeof lane.execution.fenced !== "boolean")) return current.notify({ text: `Lane ${lane.label}: invalid execution options.`, error: true });
+  }
+  const controller = new AbortController();
+  liveController = controller;
+  const id = crypto.randomUUID();
+  const events: { event: RunEvent; at: number }[] = [];
+  let run: Run | undefined;
+  let executingLane: Lane | undefined;
+  useBench.setState({ pending: true, lastRun: null, notice: null, active: { id, snapshot, rows: [], events, status: "queued" } });
+  current.setLayout({ panel: "live", collapsed: false });
+  const publish = (event: RunEvent) => {
+    events.push({ event, at: Date.now() });
+    if (!run) return;
+    liveRuns.set(id, run);
+    query.setQueryData(["run", id], run);
+    useBench.setState({ active: { id, snapshot: run.workspaceSnapshot, rows: run.rows, status: run.status, events: [...events] } });
+  };
+  try {
+    const [machine] = await getMachines(controller.signal);
+    controller.signal.throwIfAborted();
+    for (const lane of snapshot.lanes) {
+      if (lane.arch !== machine.arch) throw new Error(`Lane ${lane.label}: select the server architecture (${machine.arch}).`);
+      if (!machine.languages?.includes(lane.language)) throw new Error(`Lane ${lane.label}: no ${languages[lane.language]} executor is configured.`);
+    }
+    const sweep = [...new Set(snapshot.lanes.flatMap((lane) => parseSweep(sourceOf(lane)).sweep.map(({ name }) => name)))].map((name) => ({
+      name, values: [...new Set(snapshot.lanes.flatMap((lane) => parseSweep(sourceOf(lane)).sweep.find((entry) => entry.name === name)?.values ?? []))],
+    }));
+    run = { id, workspaceSnapshot: snapshot, machine, status: "building", sweep, rows: [], startedAt: new Date().toISOString(), source: "live" };
+    publish({ type: "queued", position: 0 });
+    for (let laneIndex = 0; laneIndex < snapshot.lanes.length; laneIndex++) {
+      controller.signal.throwIfAborted();
+      let lane = snapshot.lanes[laneIndex];
+      executingLane = lane;
+      run = { ...run, status: "building" };
+      publish({ type: "build_start", laneId: lane.id });
+      if (isStale(lane)) lane = await generate(lane, false, controller.signal);
+      controller.signal.throwIfAborted();
+      snapshot.lanes[laneIndex] = lane;
+      const document = parseSections(lane.files[harness(lane.language)] ?? "");
+      if (document.errors.length) throw new Error(document.errors[0].message);
+      const permutations = sweepMatrix(parseSweep(sourceOf(lane)).sweep);
+      for (const [index, params] of permutations.entries()) {
+        controller.signal.throwIfAborted();
+        run = { ...run, status: "running" };
+        publish({ type: "perm_start", laneId: lane.id, index: index + 1, total: permutations.length, params });
+        const response = await execute({
+          name: `${snapshot.title} · Lane ${lane.label}`, byteCount: lane.execution?.byteCount ?? 0, fenced: lane.execution?.fenced ?? true,
+          language: lane.language, arch: `${machine.os}/${machine.arch === "x86_64" ? "amd64" : "arm64"}`,
+          code: assembleSections({ ...document.sections, sweep: serializeSweep(Object.entries(params).map(([name, value]) => ({ name, values: [value] }))) }),
+        }, controller.signal);
+        controller.signal.throwIfAborted();
+        if (!Array.isArray(response.results) || response.results.length !== 1) throw new Error("Expected one result for the submitted sweep combination.");
+        const row = resultRow(response.results[0], lane.id, params);
+        run = { ...run, rows: [...run.rows, row] };
+        publish({ type: "result", laneId: lane.id, row });
+      }
+      publish({ type: "build_done", laneId: lane.id, ok: true, log: "Generation and execution completed." });
+    }
+    run = { ...run, status: "done", finishedAt: new Date().toISOString() };
+    publish({ type: "done" });
+    state().notify({ text: `Run finished. ${num.format(run.rows.length)} results.`, href: `/results/${id}` });
+  } catch (error) {
+    const cancelled = controller.signal.aborted;
+    const text = cancelled ? `Run cancelled. ${run?.rows.length ?? 0} results kept.` : `${executingLane ? `Lane ${executingLane.label}: ` : ""}${message(error)}`;
+    if (run) {
+      run = { ...run, status: cancelled ? "cancelled" : "failed", finishedAt: new Date().toISOString() };
+      if (!cancelled && executingLane) publish({ type: "build_done", laneId: executingLane.id, ok: false, log: text });
+      publish(cancelled ? { type: "done" } : { type: "error", message: text });
+    } else useBench.setState({ active: null });
+    if (!cancelled) state().setLayout({ panel: "build" });
+    state().notify({ text, error: !cancelled, href: run ? `/results/${id}` : undefined });
+  } finally {
+    if (run) useBench.setState({ lastRun: run });
+    liveController = undefined;
+    useBench.setState({ pending: false, cancelPending: false });
+    void query.invalidateQueries({ queryKey: ["machines"] });
+  }
+}
+
 export async function runBench(query: QueryClient) {
+  if (!USE_MOCK_API) return runLive(query);
   const { workspace, pending, active, generating } = state();
   if (pending || (active && !isFinished(active.status))) return;
   const invalid = workspace.lanes.flatMap((lane) => {
@@ -159,6 +258,7 @@ export async function runBench(query: QueryClient) {
 }
 
 export async function stopBench(query: QueryClient) {
+  if (!USE_MOCK_API) { liveController?.abort(); return; }
   const { active, cancelPending } = state();
   if (!active || cancelPending || isFinished(active.status)) return;
   useBench.setState({ cancelPending: true });
@@ -174,6 +274,7 @@ export async function stopBench(query: QueryClient) {
 }
 
 export async function saveBench(query: QueryClient) {
+  if (!USE_MOCK_API) return state().notify({ text: "Saving benches is unavailable with the execution proxy.", error: true });
   const { workspace } = state();
   try {
     const snapshot: Workspace = { ...workspace, title: workspace.title.trim() || "Untitled bench" };

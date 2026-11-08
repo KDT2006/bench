@@ -2,19 +2,20 @@ import primitives from "./primitives.json";
 import { parseSweep } from "./sweep";
 
 export { primitives };
-export const directives = ["sweep", "imports", "setup", "bench", "clean"];
+export { directives } from "./sections";
+import { parseSections } from "./sections";
 export const builtins = new Map(primitives.map((entry) => [entry.name, entry]));
 
 export function diagnostics(dsl: string) {
   const issues = parseSweep(dsl).errors.map((message) => ({ message, line: Number(/^Line (\d+)/.exec(message)?.[1] ?? 1) }));
-  if (!/^\s*#bench\s*$/m.test(dsl)) issues.push({ message: "Add a #bench section for the code you want to measure.", line: 1 });
+  issues.push(...parseSections(dsl).errors);
   let section = "";
   const names = new Set(parseSweep(dsl).sweep.map((entry) => entry.name));
   dsl.split(/\r?\n/).forEach((raw, index) => {
     const source = raw.replace(/\/\/.*$/, "");
     const directive = /^\s*#(\w+)/.exec(source)?.[1];
     if (directive) section = directive;
-    if (!["setup", "bench", "clean"].includes(section) || directive) return;
+    if (!["globals", "setup", "bench", "cleanup"].includes(section) || directive) return;
     if (/\bN\b/.test(source) && !names.has("N") && !/^\s*N\s*=/.test(source)) {
       issues.push({ line: index + 1, message: "Declare N in #sweep or assign it before use." });
     }

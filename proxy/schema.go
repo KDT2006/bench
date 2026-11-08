@@ -13,20 +13,27 @@ type localResponse struct {
 	Results *[]localResult `json:"results"`
 }
 
+// CounterAvailability distinguishes measured zero counts from unavailable events.
+type CounterAvailability struct {
+	L1DataMisses bool `json:"l1DataMisses"`
+	BranchMisses bool `json:"branchMisses"`
+}
+
 // localResult contains raw measurements plus per-iteration milliseconds converted
 // by the execution server using TimerFrequency. RunWindowNS is nanoseconds.
 type localResult struct {
-	Name            string            `json:"name"`
-	ByteCount       uint64            `json:"byte_count"`
-	Fenced          bool              `json:"fenced"`
-	TimerFrequency  uint64            `json:"timer_frequency"`
-	RunWindowNS     int64             `json:"run_window_ns"`
-	Iterations      int               `json:"iterations"`
-	TotalPageFaults int64             `json:"total_page_faults"`
-	MinTimeMS       float64           `json:"min_time_ms"`
-	MaxTimeMS       float64           `json:"max_time_ms"`
-	AvgTimeMS       float64           `json:"avg_time_ms"`
-	Measurements    localMeasurements `json:"measurements"`
+	CounterAvailability CounterAvailability `json:"counter_availability"`
+	Name                string              `json:"name"`
+	ByteCount           uint64              `json:"byte_count"`
+	Fenced              bool                `json:"fenced"`
+	TimerFrequency      uint64              `json:"timer_frequency"`
+	RunWindowNS         int64               `json:"run_window_ns"`
+	Iterations          int                 `json:"iterations"`
+	TotalPageFaults     int64               `json:"total_page_faults"`
+	MinTimeMS           float64             `json:"min_time_ms"`
+	MaxTimeMS           float64             `json:"max_time_ms"`
+	AvgTimeMS           float64             `json:"avg_time_ms"`
+	Measurements        localMeasurements   `json:"measurements"`
 }
 
 // localMeasurements matches execution/go's BenchmarkMeasurements. Times are CPU
@@ -55,16 +62,17 @@ type ExecuteResponse struct {
 
 // Result is one benchmark run as the website reads it.
 type Result struct {
-	Name            string       `json:"name"`
-	ByteCount       uint64       `json:"byteCount"`
-	Fenced          bool         `json:"fenced"`
-	TimerFrequency  uint64       `json:"timerFrequency"` // ticks per second
-	RunWindowNanos  int64        `json:"runWindowNanos"`
-	RunWindowMillis int64        `json:"runWindowMillis"`
-	Iterations      int          `json:"iterations"`
-	TotalPageFaults int64        `json:"totalPageFaults"`
-	Measurements    Measurements `json:"measurements"`
-	TimeMs          TimeMs       `json:"timeMs"`
+	CounterAvailability CounterAvailability `json:"counterAvailability"`
+	Name                string              `json:"name"`
+	ByteCount           uint64              `json:"byteCount"`
+	Fenced              bool                `json:"fenced"`
+	TimerFrequency      uint64              `json:"timerFrequency"` // ticks per second
+	RunWindowNanos      int64               `json:"runWindowNanos"`
+	RunWindowMillis     int64               `json:"runWindowMillis"`
+	Iterations          int                 `json:"iterations"`
+	TotalPageFaults     int64               `json:"totalPageFaults"`
+	Measurements        Measurements        `json:"measurements"`
+	TimeMs              TimeMs              `json:"timeMs"`
 }
 
 // Measurements is the website schema, including proxy-computed averages and
@@ -126,14 +134,15 @@ func convertResponse(data []byte) (ExecuteResponse, error) {
 func convertResult(r localResult) Result {
 	m := r.Measurements
 	res := Result{
-		Name:            r.Name,
-		ByteCount:       r.ByteCount,
-		Fenced:          r.Fenced,
-		TimerFrequency:  r.TimerFrequency,
-		RunWindowNanos:  r.RunWindowNS,
-		RunWindowMillis: r.RunWindowNS / 1e6,
-		Iterations:      r.Iterations,
-		TotalPageFaults: r.TotalPageFaults,
+		CounterAvailability: r.CounterAvailability,
+		Name:                r.Name,
+		ByteCount:           r.ByteCount,
+		Fenced:              r.Fenced,
+		TimerFrequency:      r.TimerFrequency,
+		RunWindowNanos:      r.RunWindowNS,
+		RunWindowMillis:     r.RunWindowNS / 1e6,
+		Iterations:          r.Iterations,
+		TotalPageFaults:     r.TotalPageFaults,
 		Measurements: Measurements{
 			NumIterations:          r.Iterations,
 			TotalPageFaults:        r.TotalPageFaults,

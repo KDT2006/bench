@@ -8,6 +8,7 @@ import type { Lane, Machine, RunEvent, Workspace } from "../api/types";
 import { LaneBadge, defaultChart, laneRatio, type ChartSettings } from "../chart/config";
 import { formatRatio, laneVar, num, param, params } from "../model/format";
 import { useBench, type Panel } from "../model/state";
+import { assembleSections, parseSections } from "../model/sections";
 import { MAX_PERMUTATIONS, parseSweep, sweepCombinations } from "../model/sweep";
 
 const Instrument = lazy(() => import("../chart/Instrument"));
@@ -23,7 +24,7 @@ function eventText(event: RunEvent) {
     case "perm_start": return `Permutation ${num.format(event.index)} of ${num.format(event.total)} · ${params(event.params)}`;
     case "result": return `Result kept · ${num.format(event.row.reps)} reps`;
     case "stderr": return event.text;
-    case "done": return "Run stream finished.";
+    case "done": return "Run finished.";
     case "error": return event.message;
   }
 }
@@ -49,9 +50,9 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
   const running = pending || Boolean(active && ["queued", "building", "running"].includes(active.status));
   const logs = active?.events ?? [];
   const onSweepEdit = (lane: Lane, sweepText: string) => {
-    const file = lane.files["benchmark.perf"] ?? "#bench\n";
-    const replace = /^#sweep[ \t]*\r?\n[^]*?(?=^#\w|(?![^]))/m;
-    useBench.getState().editFile(lane.id, "benchmark.perf", replace.test(file) ? file.replace(replace, () => `#sweep\n${sweepText.trim()}\n\n`) : `#sweep\n${sweepText.trim()}\n\n${file}`);
+    const document = parseSections(lane.files["benchmark.perf"] ?? "#bench\n");
+    if (document.errors.length) return useBench.getState().notify({ text: document.errors[0].message, error: true });
+    useBench.getState().editFile(lane.id, "benchmark.perf", assembleSections({ ...document.sections, sweep: sweepText }));
   };
 
   return <section className={`run-panel${layout.collapsed ? " is-collapsed" : ""}`} aria-label="Run panel">
@@ -73,23 +74,23 @@ export default function RunPanel({ workspace, machine, onJump, onResize, editabl
             tableHref={active && !running ? `/results/${active.id}#results-table` : "#quick-results"} />
         </Suspense>
         <aside className="live-readouts">
-          <div className="section-line"><h3>Run progress</h3><span className="chip" role="status">{active?.disconnected ? "Reconnecting…" : pending ? "Preparing…" : active?.status ?? "Ready"}</span></div>
+          <div className="section-line"><h3>Run progress</h3><span className="chip" role="status">{active?.disconnected ? "Reconnecting…" : active?.status ?? (pending ? "Preparing…" : "Ready")}</span></div>
           {running && active && <p className="help-text">Running a snapshot of this bench. You can keep editing.</p>}
           {activeLanes.map((lane) => {
             const done = rows.filter((row) => row.laneId === lane.id).length;
             const latest = logs.findLast(({ event }) => event.type === "perm_start" && event.laneId === lane.id)?.event;
-            const total = latest?.type === "perm_start" ? latest.total : activeSweep.reduce((count, entry) => count * entry.values.length, 1);
+            const total = latest?.type === "perm_start" ? latest.total : parseSweep(lane.files["benchmark.perf"] ?? "").sweep.reduce((count, entry) => count * entry.values.length, 1);
             return <div key={lane.id} className="lane-meter"><LaneBadge lane={lane} /><progress style={{ "--channel": laneVar(lane.label) } as React.CSSProperties}
               aria-label={`Lane ${lane.label} results`} value={done} max={Math.max(done, total, 1)} /><span className="mono">{num.format(done)} / {num.format(total)}</span></div>;
           })}
           <h3 id="quick-results">Quick results</h3>
           {rows.length ? <div className="table-scroll quick-table" tabIndex={0} aria-label="Quick results table">
-            <table><thead><tr><th>Lane</th><th>Params</th><th>Min cycles</th><th>Min ns</th>{activeLanes.length > 1 && <th>Ratio to A</th>}</tr></thead>
+            <table><thead><tr><th>Lane</th><th>Params</th><th>Min timer ticks</th><th>Min ns</th>{activeLanes.length > 1 && <th>Ratio to A</th>}</tr></thead>
               <tbody>{rows.slice(-8).reverse().map((row, index) => {
                 const lane = activeLanes.find((item) => item.id === row.laneId);
                 const ratio = ratios(row);
-                return <tr key={`${row.laneId}-${index}`}><td>{lane && <LaneBadge lane={lane} />}</td><td>{params(row.params)}</td><td>{row.metrics.cycles ? num.format(row.metrics.cycles.min) : "—"}</td>
-                  <td>{row.metrics.timeNs ? num.format(row.metrics.timeNs.min) : "—"}</td>{activeLanes.length > 1 && <td>{formatRatio(ratio)}</td>}</tr>;
+                return <tr key={`${row.laneId}-${index}`}><td>{lane && <LaneBadge lane={lane} />}</td><td>{params(row.params)}</td><td>{row.metrics.cycles?.min !== undefined ? num.format(row.metrics.cycles.min) : "—"}</td>
+                  <td>{row.metrics.timeNs?.min !== undefined ? num.format(row.metrics.timeNs.min) : "—"}</td>{activeLanes.length > 1 && <td>{formatRatio(ratio)}</td>}</tr>;
               })}</tbody></table>
           </div> : <p className="help-text">Results appear as each permutation finishes.</p>}
           {active && !running && <Link className="control" to={`/results/${active.id}`}>Open full results <ArrowUpRightIcon size={14} aria-hidden="true" /></Link>}

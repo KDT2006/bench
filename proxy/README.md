@@ -56,6 +56,7 @@ fields and raw tick counts. The proxy converts each entry and returns `200`:
     "name": "sort (n=100)", "byteCount": 8000, "fenced": true,
     "timerFrequency": 3302311791, "runWindowNanos": 10000000000, "runWindowMillis": 10000,
     "iterations": 13296057, "totalPageFaults": 50,
+    "counterAvailability": { "l1DataMisses": false, "branchMisses": false },
     "measurements": {
       "numIterations": 13296057, "totalPageFaults": 50,
       "MinTime": 220, "MaxTime": 14386867, "TotalTime": 4255299868, "AvgTime": 320.04,
@@ -71,7 +72,9 @@ fields and raw tick counts. The proxy converts each entry and returns `200`:
 
 - `MinTime`/`MaxTime`/`TotalTime`/`AvgTime` are timer ticks; `timeMs` is milliseconds per iteration (`total` is all iterations).
 - `GigabytesPerSecondMin` comes from `MinTime` (fastest iteration), as in the profiler. Throughput is `0` when `byteCount` or `timerFrequency` is `0`; `timeMs` is all `0` when `timerFrequency` is `0`.
-- Min/Max page-fault, L1 and branch counts belong to the fastest/slowest iteration.
+- Min/Max page-fault, L1 data-read cache-miss and branch-prediction-miss counts belong to the fastest/slowest timed iteration.
+- `counterAvailability` identifies whether each miss counter was measured. A false flag means unavailable; its numeric placeholder must not be interpreted as a measured zero. Linux attempts both counters independently; unsupported platforms or unavailable perf events retain timing results.
+- The local execution response uses `counter_availability`; the proxy exposes the same flags under `counterAvailability`.
 
 The conversion lives in `schema.go`.
 

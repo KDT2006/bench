@@ -20,6 +20,8 @@ type RepetitionProfile struct {
 }
 
 type RepetitionProfileResults struct {
+	CounterAvailability CounterAvailability
+
 	numIterations   int
 	totalPageFaults int64
 
@@ -109,7 +111,7 @@ func NewRepProfile(name string, byteCount uint64, iteration func(measure func(fu
 func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 	endTime := time.Now().Add(r.TryForTime)
 
-	// prevent core migration
+	// Keep thread-scoped perf counters on the thread running the measured work.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -117,19 +119,10 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 		MinTime: math.MaxUint64,
 	}
 
-	// init cache misses counter
-	// c, err := NewCounter(EventL1DataMisses)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer c.Close()
-
-	// init branch misses counter
-	// c2, err := NewCounter(EventBranchMisses)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer c2.Close()
+	l1Counter := openOptionalCounter(EventL1DataMisses)
+	branchCounter := openOptionalCounter(EventBranchMisses)
+	defer l1Counter.close()
+	defer branchCounter.close()
 
 	measure := func(bench func()) {
 		// count faults
@@ -138,8 +131,8 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 			log.Fatal(err)
 		}
 
-		// c.Start()
-		// c2.Start()
+		l1Counter.start()
+		branchCounter.start()
 
 		var CPUStart uint64
 		var CPUEnd uint64
@@ -158,17 +151,8 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 			CPUEnd = ReadCPUTimer()
 		}
 
-		// c.Stop()
-		// misses, err := c.Read()
-		// if err != nil {
-		// 	log.Fatal(err)
-		// }
-
-		// c2.Stop()
-		// branchMisses, err := c2.Read()
-		// if err != nil {
-		// 	log.Fatal(err)
-		// }
+		misses := l1Counter.stopRead()
+		branchMisses := branchCounter.stopRead()
 
 		majorAfter, minorAfter, err := GetPageFaultCount()
 		if err != nil {
@@ -192,19 +176,21 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 			result.MinorPageFaultCountMin = pageFaultsMinor
 			result.MajorPageFaultCountMax = pageFaultsMajor
 			result.MinorPageFaultCountMax = pageFaultsMinor
+			result.L1DataMissMin, result.L1DataMissMax = misses, misses
+			result.BranchMisssMin, result.BranchMissMax = branchMisses, branchMisses
 		} else if CPUElapsed < result.MinTime {
 			result.MinTime = CPUElapsed
 			result.GigabytesPerSecondMin = GBPerSec(float64(result.MinTime), float64(r.CPUFreq), float64(r.ByteCount))
 			result.MajorPageFaultCountMin = pageFaultsMajor
 			result.MinorPageFaultCountMin = pageFaultsMinor
-			// result.L1DataMissMin = misses
-			// result.BranchMisssMin = branchMisses
+			result.L1DataMissMin = misses
+			result.BranchMisssMin = branchMisses
 		} else if CPUElapsed > result.MaxTime {
 			result.MaxTime = CPUElapsed
 			result.MajorPageFaultCountMax = pageFaultsMajor
 			result.MinorPageFaultCountMax = pageFaultsMinor
-			// result.L1DataMissMax = misses
-			// result.BranchMissMax = branchMisses
+			result.L1DataMissMax = misses
+			result.BranchMissMax = branchMisses
 		}
 
 		result.numIterations++
@@ -213,6 +199,16 @@ func (r *RepetitionProfile) Start(fenced bool) RepetitionProfileResults {
 
 	for time.Now().Compare(endTime) == -1 {
 		r.Iteration(measure)
+	}
+
+	l1Counter.close()
+	branchCounter.close()
+	result.CounterAvailability = CounterAvailability{L1DataMisses: l1Counter.available, BranchMisses: branchCounter.available}
+	if !l1Counter.available {
+		result.L1DataMissMin, result.L1DataMissMax = 0, 0
+	}
+	if !branchCounter.available {
+		result.BranchMisssMin, result.BranchMissMax = 0, 0
 	}
 
 	result.AvgTime = float64(result.TotalTime) / float64(result.numIterations)

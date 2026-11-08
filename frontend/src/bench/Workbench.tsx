@@ -8,15 +8,15 @@ import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
-import type { Example, FileName, Lane, Machine, Workspace } from "../api/types";
-import { request } from "../api/client";
+import type { FileName, Lane, Machine, Workspace } from "../api/types";
+import { getExamples } from "../api/client";
 import { download } from "../model/download";
 import { USE_MOCK_API } from "../api/config";
 import { LaneBadge } from "../chart/config";
-import { generateLane, isStale, runBench, scaffoldKey } from "../model/actions";
+import { generateLane, isStale, runBench } from "../model/actions";
 import { freshWorkspace, replaceWorkspace, useBench, validWorkspace } from "../model/state";
 import { harness, laneColors, laneVar, languages } from "../model/format";
-import { sampleRun, starterWorkspace } from "../model/examples";
+import { starterWorkspace } from "../model/examples";
 import { MAX_SCAFFOLD_CHARACTERS, scaffoldLength, scaffoldLimitMessage } from "../model/scaffoldLimits";
 import { Overlay } from "../shell/Overlay";
 import { flushEditors } from "./editorSync";
@@ -42,13 +42,13 @@ function newLane(workspace: Workspace, from?: Lane, first?: Machine): Lane | und
   const label = laneLabels.find((entry) => workspace.lanes.every((lane) => lane.label !== entry));
   if (!label) return;
   const source = structuredClone(from ?? starterWorkspace().lanes[0]);
-  const language = from?.language ?? (workspace.lanes.length === 1 ? "python" : "go");
+  const language = from?.language ?? (USE_MOCK_API && workspace.lanes.length === 1 ? "python" : first?.languages?.[0] ?? "go");
   return {
     ...source, id: crypto.randomUUID(), label, color: laneColors[label], name: undefined, language,
     arch: from?.arch ?? first?.arch ?? source.arch,
     files: from ? source.files : { "benchmark.perf": workspace.linkDsl
       ? workspace.lanes.find((lane) => lane.mode === "scaffold")?.files["benchmark.perf"] ?? source.files["benchmark.perf"]
-      : "#sweep\nN = [1Ki, 64Ki, 1Mi]\n\n#setup\n\n#bench\nsink(N)\n" },
+      : "#imports\n\n#globals\n\n#sweep\nN: [1024,4096]\n\n#setup\n\n#bench\nsink(N)\n\n#cleanup\n" },
     build: from ? source.build : { ...source.build, toolchainVersion: first?.toolchains[language] ?? (language === "go" ? "go1.23" : "cpython3.13") },
   };
 }
@@ -64,6 +64,7 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
   const editFile = useBench((s) => s.editFile);
   const change = useBench((s) => s.changeLane);
   const generating = useBench((s) => s.generating.includes(lane.id));
+  const preparingRun = useBench((s) => s.pending);
   const events = useBench((s) => s.active?.events);
   const snapshot = useBench((s) => s.active?.snapshot.lanes.find((item) => item.id === lane.id));
   const active = useBench((s) => s.active?.status);
@@ -144,13 +145,20 @@ function LanePane({ lane, file, linked, editable, machine, machines, setFile, se
       {editable ? <>
         <input aria-label={`Lane ${lane.label} name`} title={lane.name || `Lane ${lane.label}`} className="lane-name" placeholder={`Lane ${lane.label}`} value={lane.name ?? ""} onChange={(e) => change(lane.id, (item) => ({ ...item, name: e.target.value }))} />
         <select aria-label={`Lane ${lane.label} language`} value={lane.language} onChange={(e) => updateLanguage(e.target.value as Lane["language"])}>
-          {Object.entries(languages).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+          {Object.entries(languages).map(([value, label]) => <option value={value} key={value}>{label}{!USE_MOCK_API && !machine?.languages?.includes(value as Lane["language"]) ? " (translation only)" : ""}</option>)}
         </select>
         <select aria-label={`Lane ${lane.label} architecture`} value={lane.arch} onChange={(e) => updateArch(e.target.value as Lane["arch"])}>
           {(["x86_64", "arm64"] as const).map((arch) => <option key={arch} disabled={arch !== lane.arch && !machines?.some((item) => item.arch === arch && item.status !== "offline")}>{arch}</option>)}
         </select>
       </> : <><span className="lane-name view-only">{lane.name || `Lane ${lane.label}`}</span><span>{languages[lane.language]}</span><code>{lane.arch}</code></>}
       <span className="chip mode-chip" title={lane.mode === "scaffold" ? "Edit the DSL and generate a harness." : "Edit the harness directly."}>{lane.mode === "scaffold" ? "Scaffold" : "Code"}</span>
+      {editable && lane.mode === "scaffold" && <button className="control" type="button"
+        disabled={generating || preparingRun || dslTooLong} title={`Translate pseudocode to ${languages[lane.language]}`}
+        onClick={() => {
+          flushEditors();
+          setFile(harnessName);
+          void generateLane(useBench.getState().workspace.lanes.find((item) => item.id === lane.id)!);
+        }}>{generating ? "Translating…" : `Translate to ${languages[lane.language]}`}</button>}
       {editable && <div className="lane-menu-wrap">
         <button className="control icon-control" type="button" aria-label={`Lane ${lane.label} actions`} title={`Lane ${lane.label} actions`} aria-expanded={menu} ref={menuButton} onClick={() => setMenu(!menu)}><DotsThreeIcon size={20} weight="bold" aria-hidden="true" /></button>
         {menu && <div className="lane-menu" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget) && e.relatedTarget !== menuButton.current) setMenu(false); }}
@@ -217,7 +225,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
   const [params, setParams] = useSearchParams();
   const selectedLane = workspace.lanes.find((lane) => lane.label === params.get("lane")) ?? workspace.lanes[0];
   const editable = !shared && !mobile;
-  const onlineMachine = machines?.find((item) => item.status !== "offline" && item.toolchains.go && item.toolchains.python);
+  const onlineMachine = machines?.find((item) => item.status !== "offline" && item.languages?.includes("go"));
   const machine = machines?.find((item) => item.arch === selectedLane.arch) ?? machines?.[0];
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -287,16 +295,9 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     if (!onlineMachine) return;
     const { arch } = onlineMachine;
     flushEditors();
-    const next = freshWorkspace(sampleRun.workspaceSnapshot);
-    next.lanes = next.lanes.map((lane) => {
-      const configured: Lane = {
-        ...lane,
-        arch,
-        build: { ...lane.build, toolchainVersion: onlineMachine.toolchains[lane.language] },
-        runner: { maxReps: 120, warmup: 1, minTimeMs: 50, counters: ["time", "throughput"] },
-      };
-      return { ...configured, scaffold: { dslHash: scaffoldKey(configured), model: "Built-in Array sum", warnings: [], cached: false } };
-    });
+    const next = freshWorkspace(starterWorkspace());
+    next.title = "Array sum";
+    next.lanes = next.lanes.map((lane) => ({ ...lane, arch, build: { toolchainVersion: "Server default", flags: [], env: {} } }));
     replaceWorkspace(next);
   }
   function jumpTo(lane: Lane, line: number) {
@@ -357,7 +358,7 @@ export function WorkspaceView({ workspace, machines, shared = false, onFork, run
     {shared && <div className="bench-banner"><span>You’re viewing a shared bench. Fork it to edit and run.</span><button className="control primary" type="button" onClick={onFork}>Fork</button></div>}
     {!shared && mobile && <div className="bench-banner"><span>Open on a larger screen to edit and run</span></div>}
     {!shared && editable && !USE_MOCK_API && <div className="bench-banner">
-      <span>{onlineMachine ? "Live demo · Go and Python Array sum on a connected machine" : "Waiting for a machine with Go and Python."}</span>
+      <span>{onlineMachine ? "Live Go execution · Generated code runs on the configured server" : "Waiting for a configured Go executor."}</span>
       <div className="inline-controls">
         <button className="control" type="button" onClick={loadLiveExample} disabled={!onlineMachine}>Load live Array sum</button>
         {runControl}
@@ -433,7 +434,7 @@ export default function Workbench({ machines, runControl }: { machines?: Machine
   const location = useLocation();
   const navigate = useNavigate();
   const query = useQueryClient();
-  const examples = useQuery({ queryKey: ["examples"], queryFn: ({ signal }) => request<Example[]>("/examples", { signal }), enabled: Boolean(exampleId) });
+  const examples = useQuery({ queryKey: ["examples"], queryFn: ({ signal }) => getExamples(signal), enabled: Boolean(exampleId) });
   const handled = useRef("");
   useEffect(() => {
     if (!exampleId || !examples.data || handled.current === location.key) return;

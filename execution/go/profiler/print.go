@@ -39,12 +39,21 @@ func PrintResult(out io.Writer, profile *RepetitionProfile, result RepetitionPro
 
 	fmt.Fprintf(out, "Page faults: total=%d  average/iteration=%.6f\n",
 		result.TotalPageFaults(), result.PageFaultCountAvg)
-		
+
 	fmt.Fprintf(out, "  Fastest iteration: major=%d  minor=%d\n",
 		result.MajorPageFaultCountMin, result.MinorPageFaultCountMin)
 
 	fmt.Fprintf(out, "  Slowest iteration: major=%d  minor=%d\n",
 		result.MajorPageFaultCountMax, result.MinorPageFaultCountMax)
 
-	fmt.Fprintln(out, "L1 data misses / branch misses: unavailable (counters disabled in profiler)")
+	if result.CounterAvailability.L1DataMisses {
+		fmt.Fprintf(out, "L1 data-cache misses: fastest=%d slowest=%d\n", result.L1DataMissMin, result.L1DataMissMax)
+	} else {
+		fmt.Fprintln(out, "L1 data-cache misses: unavailable")
+	}
+	if result.CounterAvailability.BranchMisses {
+		fmt.Fprintf(out, "Branch-prediction misses: fastest=%d slowest=%d\n", result.BranchMisssMin, result.BranchMissMax)
+	} else {
+		fmt.Fprintln(out, "Branch-prediction misses: unavailable")
+	}
 }

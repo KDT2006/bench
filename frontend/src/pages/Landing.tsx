@@ -15,7 +15,7 @@ const machine = sampleRun.machine;
 function ServerStatus() {
   const [online, setOnline] = useState(false);
   useEffect(() => {
-    const ping = () => fetch(`${API_BASE_URL}/discover/health`).then((res) => setOnline(res.ok), () => setOnline(false));
+    const ping = () => fetch(`${API_BASE_URL}/health`).then((res) => setOnline(res.ok), () => setOnline(false));
     ping();
     const timer = setInterval(ping, 10_000);
     return () => clearInterval(timer);
@@ -52,7 +52,7 @@ export default function Landing() {
   }, [reduced]);
   const caches = (["L1d", "L2", "L3"] as const).map((level) => [level.replace("d", ""), machine.caches.find((cache) => cache.level === level)?.sizeBytes] as const);
   const readouts = [
-    ["CPU model", machine.cpuModel], ["Base clock", `${num.format(machine.baseMhz / 1000)} GHz`],
+    ["CPU model", machine.cpuModel], ["Base clock", machine.baseMhz === undefined ? "Unavailable" : `${num.format(machine.baseMhz / 1000)} GHz`],
     ...caches.map(([level, size]) => [`${level} cache`, size ? bytes(size) : "Unavailable"]),
     ["Isolated core", machine.isolatedCores.map((core) => num.format(core)).join(", ") || "None"],
   ];
