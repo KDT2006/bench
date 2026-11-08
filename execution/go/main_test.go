@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"profiler"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,9 +71,8 @@ func TestParseBenchmarkResult(t *testing.T) {
 	want := BenchmarkResult{
 		Name: "addition", Iterations: 2, TimerFrequency: 1000,
 		TotalPageFaults: 3,
-		Measurements:    profiler.RepetitionProfileResults{MinTime: 10, MaxTime: 20, TotalTime: 30, AvgTime: 15},
+		Measurements:    BenchmarkMeasurements{MinTime: 10, MaxTime: 20, TotalTime: 30},
 	}
-	want.convertTimes()
 	payload, err := json.Marshal(want)
 	if err != nil {
 		t.Fatal(err)
@@ -99,41 +97,50 @@ func TestParseBenchmarkResult(t *testing.T) {
 	}
 }
 
-func TestBenchmarkTimeConversionAndPrinting(t *testing.T) {
+func TestBenchmarkResultPrinting(t *testing.T) {
 	result := BenchmarkResult{
 		Name: "example", TimerFrequency: 2_000_000_000, RunWindowNS: int64(10 * time.Second),
-		Measurements: profiler.RepetitionProfileResults{MinTime: 40, MaxTime: 2000, AvgTime: 100, TotalTime: 2_000_000},
-	}
-	result.convertTimes()
-	want := BenchmarkTimeMS{Min: 0.00002, Max: 0.001, Avg: 0.00005, Total: 1}
-	for _, pair := range [][2]float64{
-		{result.TimeMS.Min, want.Min}, {result.TimeMS.Max, want.Max},
-		{result.TimeMS.Avg, want.Avg}, {result.TimeMS.Total, want.Total},
-	} {
-		if diff := pair[0] - pair[1]; diff < -1e-12 || diff > 1e-12 {
-			t.Fatalf("converted %v, want %v", result.TimeMS, want)
-		}
-	}
-	if result.RunWindowMS != 10_000 {
-		t.Fatalf("run window = %v ms", result.RunWindowMS)
+		Iterations: 100, TotalPageFaults: 2,
+		Measurements: BenchmarkMeasurements{MinTime: 40, MaxTime: 2000, TotalTime: 10_000},
 	}
 	var report bytes.Buffer
 	if err := PrintBenchmarkResult(&report, result); err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"--- example ---", "min=0.000020000", "Throughput: unavailable"} {
+	for _, text := range []string{"--- example ---", "avg=100.00", "min=0.000020000", "max=0.001000000", "avg=0.000050000", "avg=0.020000", "Throughput: unavailable"} {
 		if !strings.Contains(report.String(), text) {
 			t.Errorf("report missing %q: %s", text, &report)
 		}
 	}
-	result.TimerFrequency = 0
-	result.convertTimes()
-	if result.TimeMS != nil {
-		t.Fatal("zero frequency must leave converted times unavailable")
+	result.ByteCount = 1024
+	report.Reset()
+	if err := PrintBenchmarkResult(&report, result); err != nil {
+		t.Fatal(err)
 	}
+	if !strings.Contains(report.String(), "Throughput (GiB/s): min=0.954  max=47.684  avg=19.073") {
+		t.Fatalf("unexpected throughput conversion: %s", &report)
+	}
+	result.TimerFrequency = 0
+	result.Iterations = 0
+	report.Reset()
+	if err := PrintBenchmarkResult(&report, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.String(), "Time (ms): unavailable") || strings.Contains(report.String(), "NaN") || strings.Contains(report.String(), "Inf") {
+		t.Fatalf("unexpected unavailable measurements: %s", &report)
+	}
+}
+
+func TestBenchmarkResultJSONContainsOnlyRawMeasurements(t *testing.T) {
+	result := BenchmarkResult{Iterations: 2, Measurements: BenchmarkMeasurements{MinTime: 10, MaxTime: 20, TotalTime: 30}}
 	payload, err := json.Marshal(result)
-	if err != nil || !bytes.Contains(payload, []byte(`"time_ms":null`)) {
-		t.Fatalf("expected JSON null times, got %s, %v", payload, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"run_window_ms", "time_ms", "AvgTime", "GigabytesPerSecondMin", "GigabytesPerSecondMax", "GigabytesPerSecondAvg", "PageFaultCountAvg"} {
+		if bytes.Contains(payload, []byte(`"`+field+`"`)) {
+			t.Errorf("derived field %s is still serialized: %s", field, payload)
+		}
 	}
 }
 

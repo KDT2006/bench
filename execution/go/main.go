@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/format"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +63,19 @@ func main() {
 		"run_window_ns": int64(rep.TryForTime),
 		"iterations": res.Iterations(),
 		"total_page_faults": res.TotalPageFaults(),
-		"measurements": res,
+		"measurements": map[string]any{
+			"MinTime": res.MinTime,
+			"MaxTime": res.MaxTime,
+			"TotalTime": res.TotalTime,
+			"MajorPageFaultCountMin": res.MajorPageFaultCountMin,
+			"MinorPageFaultCountMin": res.MinorPageFaultCountMin,
+			"MajorPageFaultCountMax": res.MajorPageFaultCountMax,
+			"MinorPageFaultCountMax": res.MinorPageFaultCountMax,
+			"L1DataMissMin": res.L1DataMissMin,
+			"L1DataMissMax": res.L1DataMissMax,
+			"BranchMisssMin": res.BranchMisssMin,
+			"BranchMissMax": res.BranchMissMax,
+		},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -85,68 +99,68 @@ type ExecutionConfig struct {
 }
 
 // BenchmarkResult preserves raw profiler measurements (times are CPU ticks).
-// RunWindowNS is in nanoseconds; throughput measurements are in GiB/s.
+// RunWindowNS is in nanoseconds. Averages, milliseconds and throughput can be
+// derived from these values and are computed only when displaying the result.
 type BenchmarkResult struct {
-	Name            string                            `json:"name"`
-	ByteCount       uint64                            `json:"byte_count"`
-	Fenced          bool                              `json:"fenced"`
-	TimerFrequency  uint64                            `json:"timer_frequency"`
-	RunWindowNS     int64                             `json:"run_window_ns"`
-	Iterations      int                               `json:"iterations"`
-	TotalPageFaults int64                             `json:"total_page_faults"`
-	Measurements    profiler.RepetitionProfileResults `json:"measurements"`
-	RunWindowMS     float64                           `json:"run_window_ms"`
-	TimeMS          *BenchmarkTimeMS                  `json:"time_ms"`
+	Name            string                `json:"name"`
+	ByteCount       uint64                `json:"byte_count"`
+	Fenced          bool                  `json:"fenced"`
+	TimerFrequency  uint64                `json:"timer_frequency"`
+	RunWindowNS     int64                 `json:"run_window_ns"`
+	Iterations      int                   `json:"iterations"`
+	TotalPageFaults int64                 `json:"total_page_faults"`
+	Measurements    BenchmarkMeasurements `json:"measurements"`
 }
 
-// BenchmarkTimeMS contains elapsed times converted from the measured ticks.
-// Total excludes setup, cleanup and profiler bookkeeping.
-type BenchmarkTimeMS struct {
-	Min   float64 `json:"min"`
-	Max   float64 `json:"max"`
-	Avg   float64 `json:"avg"`
-	Total float64 `json:"total"`
-}
+// BenchmarkMeasurements contains raw aggregates only. Fault and hardware-counter
+// Min/Max values belong to the fastest/slowest timed iterations respectively.
+type BenchmarkMeasurements struct {
+	MinTime   uint64
+	MaxTime   uint64
+	TotalTime uint64
 
-func (r *BenchmarkResult) convertTimes() {
-	r.RunWindowMS = float64(r.RunWindowNS) / float64(time.Millisecond)
-	r.TimeMS = nil
-	if r.TimerFrequency == 0 {
-		return
-	}
-	msPerTick := 1000 / float64(r.TimerFrequency)
-	r.TimeMS = &BenchmarkTimeMS{
-		Min:   float64(r.Measurements.MinTime) * msPerTick,
-		Max:   float64(r.Measurements.MaxTime) * msPerTick,
-		Avg:   r.Measurements.AvgTime * msPerTick,
-		Total: float64(r.Measurements.TotalTime) * msPerTick,
-	}
+	MajorPageFaultCountMin int64
+	MinorPageFaultCountMin int64
+	MajorPageFaultCountMax int64
+	MinorPageFaultCountMax int64
+
+	L1DataMissMin  int64
+	L1DataMissMax  int64
+	BranchMisssMin int64
+	BranchMissMax  int64
 }
 
 // PrintBenchmarkResult writes a human-readable report for internal use.
 func PrintBenchmarkResult(out io.Writer, result BenchmarkResult) error {
-	result.convertTimes()
 	var report strings.Builder
 	fmt.Fprintf(&report, "--- %s ---\r\n", result.Name)
 	m := result.Measurements
+	var avgTicks, avgPageFaults float64
+	if result.Iterations > 0 {
+		avgTicks = float64(m.TotalTime) / float64(result.Iterations)
+		avgPageFaults = float64(result.TotalPageFaults) / float64(result.Iterations)
+	}
 	fmt.Fprintf(&report, "Ticks: min=%d  max=%d  avg=%.2f\r\n",
-		m.MinTime, m.MaxTime, m.AvgTime)
-	if result.TimeMS != nil {
-		t := result.TimeMS
+		m.MinTime, m.MaxTime, avgTicks)
+	if result.TimerFrequency > 0 {
+		msPerTick := 1000 / float64(result.TimerFrequency)
 		fmt.Fprintf(&report, "Time (ms): min=%.9f  max=%.9f  avg=%.9f\r\n",
-			t.Min, t.Max, t.Avg)
+			float64(m.MinTime)*msPerTick, float64(m.MaxTime)*msPerTick, avgTicks*msPerTick)
 	} else {
 		fmt.Fprint(&report, "Time (ms): unavailable\r\n")
 	}
-	if result.ByteCount > 0 && result.TimerFrequency > 0 {
+	if result.ByteCount > 0 && result.TimerFrequency > 0 && m.MinTime > 0 && m.MaxTime > 0 && avgTicks > 0 {
+		throughput := func(ticks float64) float64 {
+			return profiler.GBPerSec(ticks, float64(result.TimerFrequency), float64(result.ByteCount))
+		}
 		fmt.Fprintf(&report, "Throughput (GiB/s): min=%.3f  max=%.3f  avg=%.3f\r\n",
-			m.GigabytesPerSecondMax, m.GigabytesPerSecondMin, m.GigabytesPerSecondAvg)
+			throughput(float64(m.MaxTime)), throughput(float64(m.MinTime)), throughput(avgTicks))
 	} else {
 		fmt.Fprint(&report, "Throughput: unavailable\r\n")
 	}
 	fmt.Fprintf(&report, "Page faults: fastest=%d  slowest=%d  avg=%.6f\r\n",
 		m.MajorPageFaultCountMin+m.MinorPageFaultCountMin,
-		m.MajorPageFaultCountMax+m.MinorPageFaultCountMax, m.PageFaultCountAvg)
+		m.MajorPageFaultCountMax+m.MinorPageFaultCountMax, avgPageFaults)
 	fmt.Fprint(&report, "L1 data misses: unavailable\r\nBranch mispredictions: unavailable\r\n\r\n")
 	_, err := io.WriteString(out, report.String())
 	return err
@@ -207,7 +221,6 @@ func ParseBenchmarkResult(stdout io.Reader) (BenchmarkResult, error) {
 	if result.Iterations <= 0 {
 		return BenchmarkResult{}, fmt.Errorf("no measurements collected")
 	}
-	result.convertTimes()
 	return result, nil
 }
 
@@ -297,96 +310,160 @@ func BuildSweepMatrix(sweep string) ([]string, [][]int, error) {
 	return variables, matrix, nil
 }
 
-func main() {
-	fileInfo, err := os.Stat("data.bin")
-	if err != nil {
-		log.Fatal(err)
-	}
+// ExecutionRequest is the JSON payload accepted by POST /execute.
+type ExecutionRequest struct {
+	Name      string `json:"name"`
+	ByteCount int    `json:"byteCount"`
+	Fenced    bool   `json:"fenced"`
+	Code      string `json:"code"`
+}
 
+// ParseExecutionConfig separates directive blocks without changing their Go code.
+func ParseExecutionConfig(request ExecutionRequest) (ExecutionConfig, error) {
 	cfg := ExecutionConfig{
-		Name:      "File read",
-		ByteCount: int(fileInfo.Size()),
-		Fenced:    true,
-		Imports:   `"io"`,
-		Globals:   "var bytesRead int64",
-		Sweep:     "bufferSize: [262144, 524288, 1048576]",
-		Setup: `buffer := make([]byte, bufferSize)
-file, err := os.Open("data.bin")
-if err != nil {
-	panic(err)
-}`,
-		Bench: `var total int64
-for {
-	n, err := file.Read(buffer)
-	total += int64(n)
-	if err == io.EOF {
-		break
+		Name: request.Name, ByteCount: request.ByteCount, Fenced: request.Fenced,
 	}
+	if strings.TrimSpace(request.Name) == "" {
+		return ExecutionConfig{}, fmt.Errorf("name is required")
+	}
+	if request.ByteCount < 0 {
+		return ExecutionConfig{}, fmt.Errorf("byteCount must be nonnegative")
+	}
+	blocks := map[string]*string{
+		"#imports": &cfg.Imports,
+		"#globals": &cfg.Globals,
+		"#sweep":   &cfg.Sweep,
+		"#setup":   &cfg.Setup,
+		"#bench":   &cfg.Bench,
+		"#cleanup": &cfg.Cleanup,
+	}
+	seen := make(map[string]bool)
+	var current *string
+	var body strings.Builder
+	for i, line := range strings.Split(strings.ReplaceAll(request.Code, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			block, ok := blocks[trimmed]
+			if !ok {
+				return ExecutionConfig{}, fmt.Errorf("line %d: unknown directive %q", i+1, trimmed)
+			}
+			if seen[trimmed] {
+				return ExecutionConfig{}, fmt.Errorf("line %d: duplicate directive %s", i+1, trimmed)
+			}
+			seen[trimmed] = true
+			if current != nil {
+				*current = body.String()
+				body.Reset()
+			}
+			current = block
+			continue
+		}
+		if current == nil {
+			if trimmed != "" {
+				return ExecutionConfig{}, fmt.Errorf("line %d: code must follow a directive", i+1)
+			}
+			continue
+		}
+		body.WriteString(line)
+		body.WriteByte('\n')
+	}
+	if current != nil {
+		*current = body.String()
+	}
+	if !seen["#bench"] {
+		return ExecutionConfig{}, fmt.Errorf("#bench directive is required")
+	}
+	return cfg, nil
+}
+
+// RunSweep executes each combination with its own timeout and returns JSON-ready results.
+func RunSweep(ctx context.Context, cfg ExecutionConfig) ([]BenchmarkResult, error) {
+	variables, matrix, err := BuildSweepMatrix(cfg.Sweep)
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+	results := make([]BenchmarkResult, 0, len(matrix))
+	for _, row := range matrix {
+		var setup strings.Builder
+		assignments := make([]string, len(row))
+		for i, value := range row {
+			assignments[i] = fmt.Sprintf("%s=%d", variables[i], value)
+			fmt.Fprintf(&setup, "%s := %d\n", variables[i], value)
+		}
+		setup.WriteString(cfg.Setup)
+		runCfg := cfg
+		runCfg.Setup = setup.String()
+		if len(assignments) > 0 {
+			runCfg.Name += " (" + strings.Join(assignments, ", ") + ")"
+		}
+		runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		result, err := RunExecution(runCtx, runCfg)
+		contextErr := runCtx.Err()
+		cancel()
+		if contextErr != nil {
+			return nil, fmt.Errorf("%s: %w", runCfg.Name, contextErr)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", runCfg.Name, err)
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func handleExecution(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	defer r.Body.Close()
+	var request ExecutionRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		http.Error(w, "body must contain one JSON object", http.StatusBadRequest)
+		return
+	}
+	cfg, err := ParseExecutionConfig(request)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, _, err := BuildSweepMatrix(cfg.Sweep); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	results, err := RunSweep(r.Context(), cfg)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(struct {
+		Results []BenchmarkResult `json:"results"`
+	}{Results: results}); err != nil {
+		log.Printf("write execution response: %v", err)
 	}
 }
-bytesRead = total`,
-		Cleanup: `if err := file.Close(); err != nil {
-	panic(err)
-}`,
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/execute", handleExecution)
+	server := &http.Server{
+		Addr:              "127.0.0.1:6969",
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	variables, sweepMatrix, err := BuildSweepMatrix(cfg.Sweep)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	fmt.Println(variables)
-	for i, row := range sweepMatrix {
-		fmt.Println(i, row)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	// create different configs for each combination
-	for _, row := range sweepMatrix {
-		setupString := strings.Builder{}
-		assignments := make([]string, len(row))
-
-		// write a variable declration for each variable value
-		for i, rowSplit := range row {
-			assignments[i] = fmt.Sprintf("%s=%d", variables[i], rowSplit)
-			declString := fmt.Sprintf("%s := %d\n", variables[i], rowSplit)
-			setupString.WriteString(declString)
-		}
-
-		// append user setup code if there's any
-		if len(cfg.Setup) != 0 {
-			setupString.WriteString(fmt.Sprintf("\n%s", cfg.Setup))
-		}
-
-		name := cfg.Name
-		if len(assignments) > 0 {
-			name += " (" + strings.Join(assignments, ", ") + ")"
-		}
-
-		tmpCfg := ExecutionConfig{
-			BenchDuration: cfg.BenchDuration,
-			Name:          name,
-			ByteCount:     cfg.ByteCount,
-			Fenced:        cfg.Fenced,
-			Imports:       cfg.Imports,
-			Globals:       cfg.Globals,
-			Setup:         setupString.String(),
-			Bench:         cfg.Bench,
-			Cleanup:       cfg.Cleanup,
-		}
-
-		result, err := RunExecution(ctx, tmpCfg)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if err := PrintBenchmarkResult(os.Stdout, result); err != nil {
-			log.Fatal(err)
-		}
-
-	}
+	log.Printf("Go execution server listening on http://%s", server.Addr)
+	log.Fatal(server.ListenAndServe())
 }
